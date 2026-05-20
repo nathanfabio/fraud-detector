@@ -1,0 +1,32 @@
+services:
+  lb:
+    image: haproxy:2.8-alpine
+    ports:
+      - "9090:8080"
+    volumes:
+      - ./haproxy.cfg:/usr/local/etc/haproxy/haproxy.cfg:ro
+    depends_on: [app1, app2]
+    networks: [fraud_net]
+    restart: unless-stopped
+    mem_limit: 20m
+    cpus: 0.1
+
+  app1:
+    build: .
+    expose: ["9999"]
+    networks: [fraud_net]
+    restart: unless-stopped
+    mem_limit: 165m
+    cpus: 0.45
+
+  app2:
+    build: .
+    expose: ["9999"]
+    networks: [fraud_net]
+    restart: unless-stopped
+    mem_limit: 165m
+    cpus: 0.45
+
+networks:
+  fraud_net:
+    driver: bridge
