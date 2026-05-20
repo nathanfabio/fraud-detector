@@ -12,7 +12,7 @@ services:
     cpus: 0.1
 
   app1:
-    build: .
+    image: nathanfabio/fraud-detector:v1
     expose: ["9999"]
     networks: [fraud_net]
     restart: unless-stopped
@@ -20,7 +20,7 @@ services:
     cpus: 0.45
 
   app2:
-    build: .
+    image: nathanfabio/fraud-detector:v1
     expose: ["9999"]
     networks: [fraud_net]
     restart: unless-stopped
