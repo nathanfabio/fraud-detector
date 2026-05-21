@@ -1,32 +1,70 @@
-services:
-  lb:
-    image: haproxy:2.8-alpine
-    ports:
-      - "9090:8080"
-    volumes:
-      - ./haproxy.cfg:/usr/local/etc/haproxy/haproxy.cfg:ro
-    depends_on: [app1, app2]
-    networks: [fraud_net]
-    restart: unless-stopped
-    mem_limit: 20m
-    cpus: 0.1
-
-  app1:
-    image: nathanfabio/fraud-detector:v1
-    expose: ["9999"]
-    networks: [fraud_net]
-    restart: unless-stopped
-    mem_limit: 165m
-    cpus: 0.45
-
-  app2:
-    image: nathanfabio/fraud-detector:v1
-    expose: ["9999"]
-    networks: [fraud_net]
-    restart: unless-stopped
-    mem_limit: 165m
-    cpus: 0.45
-
 networks:
   fraud_net:
     driver: bridge
+
+services:
+  app1:
+    image: nathanfabio/fraud-detector:v1
+    expose:
+      - "9999"
+    networks:
+      - fraud_net
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          cpus: '0.45'
+          memory: 165M
+
+  app2:
+    image: nathanfabio/fraud-detector:v1
+    expose:
+      - "9999"
+    networks:
+      - fraud_net
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          cpus: '0.45'
+          memory: 165M
+
+  lb:
+    image: haproxy:2.8-alpine
+    ports:
+      - "9999:9999"
+    command:
+      - sh
+      - -c
+      - |
+        cat > /tmp/haproxy.cfg <<'HAPROXY_CFG'
+        global
+            log stdout format raw local0
+            maxconn 4096
+        defaults
+            mode http
+            log global
+            timeout connect 5s
+            timeout client 30s
+            timeout server 30s
+        frontend http_front
+            bind *:9999
+            default_backend app_servers
+        backend app_servers
+            balance roundrobin
+            option tcp-check
+            server app1 app1:9999 check inter 3s fall 2 rise 2
+            server app2 app2:9999 check inter 3s fall 2 rise 2
+        HAPROXY_CFG
+        haproxy -f /tmp/haproxy.cfg
+    depends_on:
+      - app1
+      - app2
+    networks:
+      - fraud_net
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          cpus: '0.1'
+          memory: 20M
