@@ -4,7 +4,7 @@ networks:
 
 services:
   app1:
-    image: nathanfabio/fraud-detector:v1
+    image: nathanfabio/fraud-detector:latest
     expose:
       - "9999"
     networks:
@@ -17,7 +17,7 @@ services:
           memory: 165M
 
   app2:
-    image: nathanfabio/fraud-detector:v1
+    image: nathanfabio/fraud-detector:latest
     expose:
       - "9999"
     networks:
