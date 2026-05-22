@@ -1,70 +1,59 @@
-networks:
-  fraud_net:
-    driver: bridge
-
 services:
-  app1:
-    image: nathanfabio/fraud-detector:latest
-    expose:
-      - "9999"
-    networks:
-      - fraud_net
-    restart: unless-stopped
-    deploy:
-      resources:
-        limits:
-          cpus: '0.45'
-          memory: 165M
-
-  app2:
-    image: nathanfabio/fraud-detector:latest
-    expose:
-      - "9999"
-    networks:
-      - fraud_net
-    restart: unless-stopped
-    deploy:
-      resources:
-        limits:
-          cpus: '0.45'
-          memory: 165M
-
   lb:
-    image: haproxy:2.8-alpine
+    image: nginx:alpine
     ports:
       - "9999:9999"
-    command:
-      - sh
-      - -c
-      - |
-        cat > /tmp/haproxy.cfg <<'HAPROXY_CFG'
-        global
-            log stdout format raw local0
-            maxconn 4096
-        defaults
-            mode http
-            log global
-            timeout connect 5s
-            timeout client 30s
-            timeout server 30s
-        frontend http_front
-            bind *:9999
-            default_backend app_servers
-        backend app_servers
-            balance roundrobin
-            option tcp-check
-            server app1 app1:9999 check inter 3s fall 2 rise 2
-            server app2 app2:9999 check inter 3s fall 2 rise 2
-        HAPROXY_CFG
-        haproxy -f /tmp/haproxy.cfg
+    volumes:
+      - ./nginx.conf:/etc/nginx/nginx.conf:ro
     depends_on:
-      - app1
-      - app2
+      - api1
+      - api2
     networks:
-      - fraud_net
-    restart: unless-stopped
+      - fraud-net
     deploy:
       resources:
         limits:
           cpus: '0.1'
-          memory: 20M
+          memory: 10M
+
+  api1:
+    image: nathanfabio/fraud-detector2:latest
+    environment:
+      - VECTOR_SEARCH_URL=http://vector-search:8080
+    depends_on:
+      - vector-search
+    networks:
+      - fraud-net
+    deploy:
+      resources:
+        limits:
+          cpus: '0.2'
+          memory: 50M
+
+  api2:
+    image: nathanfabio/fraud-detector2:latest
+    environment:
+      - VECTOR_SEARCH_URL=http://vector-search:8080
+    depends_on:
+      - vector-search
+    networks:
+      - fraud-net
+    deploy:
+      resources:
+        limits:
+          cpus: '0.2'
+          memory: 50M
+
+  vector-search:
+    image: nathanfabio/vector-search:latest
+    networks:
+      - fraud-net
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 220M
+
+networks:
+  fraud-net:
+    driver: bridge
