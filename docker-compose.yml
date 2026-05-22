@@ -21,7 +21,8 @@ services:
     environment:
       - VECTOR_SEARCH_URL=http://vector-search:8080
     depends_on:
-      - vector-search
+      vector-search:
+        condition: service_healthy
     networks:
       - fraud-net
     deploy:
@@ -29,13 +30,15 @@ services:
         limits:
           cpus: '0.2'
           memory: 50M
+    restart: unless-stopped
 
   api2:
     image: nathanfabio/fraud-detector2:latest
     environment:
       - VECTOR_SEARCH_URL=http://vector-search:8080
     depends_on:
-      - vector-search
+      vector-search:
+        condition: service_healthy
     networks:
       - fraud-net
     deploy:
@@ -43,16 +46,24 @@ services:
         limits:
           cpus: '0.2'
           memory: 50M
+    restart: unless-stopped
 
   vector-search:
     image: nathanfabio/vector-search:latest
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:8080/ready"]
+      interval: 2s
+      timeout: 1s
+      retries: 5
+      start_period: 10s
     networks:
       - fraud-net
     deploy:
       resources:
         limits:
           cpus: '0.5'
-          memory: 220M
+          memory: 230M 
+    restart: unless-stopped
 
 networks:
   fraud-net:
