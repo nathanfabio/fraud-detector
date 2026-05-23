@@ -35,9 +35,9 @@ services:
     healthcheck:
       test: ["CMD", "wget", "-qO-", "http://localhost:8080/ready"]
       interval: 5s
-      timeout: 3s
-      retries: 5
-      start_period: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
     deploy:
       resources:
         limits:
@@ -60,9 +60,9 @@ services:
     healthcheck:
       test: ["CMD", "wget", "-qO-", "http://localhost:8080/ready"]
       interval: 5s
-      timeout: 3s
-      retries: 5
-      start_period: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
     deploy:
       resources:
         limits:
@@ -81,10 +81,10 @@ services:
       - fraud-net
     healthcheck:
       test: ["CMD", "wget", "-qO-", "http://localhost:8081/ready"]
-      interval: 5s
-      timeout: 3s
-      retries: 60
-      start_period: 30s
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 120s
     deploy:
       resources:
         limits:
