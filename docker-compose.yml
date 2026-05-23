@@ -9,10 +9,8 @@ services:
     networks:
       - fraud-net
     depends_on:
-      api-1:
-        condition: service_healthy
-      api-2:
-        condition: service_healthy
+      - api-1
+      - api-2
     deploy:
       resources:
         limits:
@@ -28,14 +26,7 @@ services:
     networks:
       - fraud-net
     depends_on:
-      search:
-        condition: service_healthy
-    healthcheck:
-      test: ["CMD", "wget", "-qO-", "http://localhost:8080/ready"]
-      interval: 5s
-      timeout: 5s
-      retries: 10
-      start_period: 30s
+      - search
     deploy:
       resources:
         limits:
@@ -51,14 +42,7 @@ services:
     networks:
       - fraud-net
     depends_on:
-      search:
-        condition: service_healthy
-    healthcheck:
-      test: ["CMD", "wget", "-qO-", "http://localhost:8080/ready"]
-      interval: 5s
-      timeout: 5s
-      retries: 10
-      start_period: 30s
+      - search
     deploy:
       resources:
         limits:
@@ -73,12 +57,6 @@ services:
       - REFERENCES_PATH=/app/resources/references.json.gz
     networks:
       - fraud-net
-    healthcheck:
-      test: ["CMD", "wget", "-qO-", "http://localhost:8081/ready"]
-      interval: 10s
-      timeout: 5s
-      retries: 30
-      start_period: 120s
     deploy:
       resources:
         limits:
