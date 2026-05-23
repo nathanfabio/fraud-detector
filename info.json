@@ -1,7 +1,7 @@
 {
     "participants": ["Nathan Fabio"],
-    "social": ["https://github.com/nathanfabio"],
+    "social": ["https://github.com/nathanfabio", "https://www.linkedin.com/in/nathanfabio/"],
     "source-code-repo": "https://github.com/nathanfabio/fraud-detector",
-    "stack": ["go", "haproxy"],
+    "stack": ["go", "nginx"],
     "open_to_work": true
 }
