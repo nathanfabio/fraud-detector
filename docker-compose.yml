@@ -29,10 +29,10 @@ services:
       - search
     healthcheck:
       test: ["CMD", "wget", "-qO-", "http://localhost:8080/ready"]
-      interval: 3s
+      interval: 5s
       timeout: 5s
-      retries: 40
-      start_period: 60s
+      retries: 60
+      start_period: 300s
     deploy:
       resources:
         limits:
@@ -51,10 +51,10 @@ services:
       - search
     healthcheck:
       test: ["CMD", "wget", "-qO-", "http://localhost:8080/ready"]
-      interval: 3s
+      interval: 5s
       timeout: 5s
-      retries: 40
-      start_period: 60s
+      retries: 60
+      start_period: 300s
     deploy:
       resources:
         limits:
