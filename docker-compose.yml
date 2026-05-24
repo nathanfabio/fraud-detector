@@ -7,10 +7,8 @@ services:
     networks:
       - fraud-net
     depends_on:
-      api-1:
-        condition: service_healthy
-      api-2:
-        condition: service_healthy
+      - api-1
+      - api-2
     deploy:
       resources:
         limits:
@@ -27,12 +25,6 @@ services:
       - fraud-net
     depends_on:
       - search
-    healthcheck:
-      test: ["CMD", "wget", "-qO-", "http://localhost:8080/ready"]
-      interval: 5s
-      timeout: 5s
-      retries: 60
-      start_period: 300s
     deploy:
       resources:
         limits:
@@ -49,12 +41,6 @@ services:
       - fraud-net
     depends_on:
       - search
-    healthcheck:
-      test: ["CMD", "wget", "-qO-", "http://localhost:8080/ready"]
-      interval: 5s
-      timeout: 5s
-      retries: 60
-      start_period: 300s
     deploy:
       resources:
         limits:
