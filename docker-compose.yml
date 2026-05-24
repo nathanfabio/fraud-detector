@@ -26,14 +26,13 @@ services:
     networks:
       - fraud-net
     depends_on:
-      search:
-        condition: service_healthy
+      - search
     healthcheck:
       test: ["CMD", "wget", "-qO-", "http://localhost:8080/ready"]
-      interval: 2s
-      timeout: 3s
-      retries: 15
-      start_period: 10s
+      interval: 3s
+      timeout: 5s
+      retries: 40
+      start_period: 60s
     deploy:
       resources:
         limits:
@@ -49,14 +48,13 @@ services:
     networks:
       - fraud-net
     depends_on:
-      search:
-        condition: service_healthy
+      - search
     healthcheck:
       test: ["CMD", "wget", "-qO-", "http://localhost:8080/ready"]
-      interval: 2s
-      timeout: 3s
-      retries: 15
-      start_period: 10s
+      interval: 3s
+      timeout: 5s
+      retries: 40
+      start_period: 60s
     deploy:
       resources:
         limits:
@@ -70,12 +68,6 @@ services:
       - PORT=8081
     networks:
       - fraud-net
-    healthcheck:
-      test: ["CMD", "wget", "-qO-", "http://localhost:8081/ready"]
-      interval: 2s
-      timeout: 3s
-      retries: 15
-      start_period: 30s
     deploy:
       resources:
         limits:
