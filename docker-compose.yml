@@ -4,15 +4,15 @@ services:
     image: nathanfabio/fraud-nginx:latest
     ports:
       - "9999:9999"
-    networks:
-      - fraud-net
     depends_on:
       - api-1
       - api-2
+    networks:
+      - fraud-net
     deploy:
       resources:
         limits:
-          cpus:   "0.05"
+          cpus: '0.05'
           memory: 20M
     restart: unless-stopped
 
@@ -21,14 +21,15 @@ services:
     environment:
       - PORT=8080
       - SEARCH_URL=http://search:8081
+    depends_on:
+      search:
+        condition: service_healthy
     networks:
       - fraud-net
-    depends_on:
-      - search
     deploy:
       resources:
         limits:
-          cpus:   "0.20"
+          cpus: '0.20'
           memory: 55M
     restart: unless-stopped
 
@@ -37,14 +38,15 @@ services:
     environment:
       - PORT=8080
       - SEARCH_URL=http://search:8081
+    depends_on:
+      search:
+        condition: service_healthy
     networks:
       - fraud-net
-    depends_on:
-      - search
     deploy:
       resources:
         limits:
-          cpus:   "0.20"
+          cpus: '0.20'
           memory: 55M
     restart: unless-stopped
 
@@ -54,10 +56,16 @@ services:
       - PORT=8081
     networks:
       - fraud-net
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:8081/ready"]
+      interval: 2s
+      timeout: 1s
+      retries: 5
+      start_period: 60s
     deploy:
       resources:
         limits:
-          cpus:   "0.55"
+          cpus: '0.55'
           memory: 220M
     restart: unless-stopped
 
