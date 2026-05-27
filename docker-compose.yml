@@ -14,7 +14,7 @@ services:
     cpus: "0.1"
 
   api1:
-    build: .
+    image: nathanfabio/fraud-detector4:latest
     environment:
       - PORT=8080
       - GOMEMLIMIT=140MiB
@@ -25,7 +25,7 @@ services:
     cpus: "0.45"
 
   api2:
-    build: .
+    image: nathanfabio/fraud-detector4:latest
     environment:
       - PORT=8080
       - GOMEMLIMIT=140MiB
