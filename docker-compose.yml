@@ -1,74 +1,40 @@
 services:
-
-  nginx:
-    image: nathanfabio/fraud-nginx:latest
+  lb:
+    image: nginx:alpine
     ports:
-      - "9999:9999"
+      - "9999:80"
+    volumes:
+      - ./nginx.conf:/etc/nginx/nginx.conf:ro
     depends_on:
-      - api-1
-      - api-2
+      - api1
+      - api2
     networks:
-      - fraud-net
-    deploy:
-      resources:
-        limits:
-          cpus: '0.05'
-          memory: 20M
-    restart: unless-stopped
+      - app-net
+    mem_limit: 32m
+    cpus: "0.1"
 
-  api-1:
-    image: nathanfabio/fraud-detector3:latest
+  api1:
+    build: .
     environment:
       - PORT=8080
-      - SEARCH_URL=http://search:8081
-    depends_on:
-      search:
-        condition: service_healthy
+      - GOMEMLIMIT=140MiB
+      - GOGC=50
     networks:
-      - fraud-net
-    deploy:
-      resources:
-        limits:
-          cpus: '0.20'
-          memory: 55M
-    restart: unless-stopped
+      - app-net
+    mem_limit: 159m
+    cpus: "0.45"
 
-  api-2:
-    image: nathanfabio/fraud-detector3:latest
+  api2:
+    build: .
     environment:
       - PORT=8080
-      - SEARCH_URL=http://search:8081
-    depends_on:
-      search:
-        condition: service_healthy
+      - GOMEMLIMIT=140MiB
+      - GOGC=50
     networks:
-      - fraud-net
-    deploy:
-      resources:
-        limits:
-          cpus: '0.20'
-          memory: 55M
-    restart: unless-stopped
-
-  search:
-    image: nathanfabio/vector-search2:latest
-    environment:
-      - PORT=8081
-    networks:
-      - fraud-net
-    healthcheck:
-      test: ["CMD", "wget", "-qO-", "http://localhost:8081/ready"]
-      interval: 2s
-      timeout: 1s
-      retries: 5
-      start_period: 60s
-    deploy:
-      resources:
-        limits:
-          cpus: '0.55'
-          memory: 220M
-    restart: unless-stopped
+      - app-net
+    mem_limit: 159m
+    cpus: "0.45"
 
 networks:
-  fraud-net:
+  app-net:
     driver: bridge
