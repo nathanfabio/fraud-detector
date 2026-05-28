@@ -45,6 +45,10 @@ func main() {
 		}
 		log.Printf("Loaded %d reference vectors", refData.Total())
 		h.SetReady(refData)
+
+		log.Println("Building sorted index in background...")
+		refData.BuildIndex()
+		log.Println("Sorted index ready")
 	}()
 
 	log.Printf("Starting server on port %s", port)
