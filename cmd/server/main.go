@@ -43,12 +43,7 @@ func main() {
 		if err != nil {
 			log.Fatalf("Failed to load references: %v", err)
 		}
-		log.Printf("Loaded %d reference vectors (partition: %d/%d/%d/%d/%d/%d/%d/%d/%d/%d/%d/%d/%d/%d/%d/%d)", 
-			refData.Total(),
-			refData.Parts[0].Count, refData.Parts[1].Count, refData.Parts[2].Count, refData.Parts[3].Count,
-			refData.Parts[4].Count, refData.Parts[5].Count, refData.Parts[6].Count, refData.Parts[7].Count,
-			refData.Parts[8].Count, refData.Parts[9].Count, refData.Parts[10].Count, refData.Parts[11].Count,
-			refData.Parts[12].Count, refData.Parts[13].Count, refData.Parts[14].Count, refData.Parts[15].Count)
+		log.Printf("Loaded %d reference vectors", refData.Total())
 		h.SetReady(refData)
 	}()
 

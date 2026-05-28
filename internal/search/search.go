@@ -6,57 +6,58 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"runtime"
-	"sync"
 )
 
 const dims = 14
 const topK = 5
 const int16Scale = 32767
-const numPartitions = 16
+const numParts = 16
+const clustersPerPart = 128
 
-type result struct {
-	indices   [topK]int
-	distances [topK]int64
+type rawVec struct {
+	data  [dims]int16
+	fraud bool
 }
 
 type ReferenceData struct {
-	Parts [numPartitions]partition
+	Parts [numParts]partition
 }
 
 type partition struct {
-	Vectors []int16
-	Frauds  []bool
-	Count   int
+	Clusters [clustersPerPart]cluster
+	Count    int
+}
+
+type cluster struct {
+	Vectors  []int16
+	Frauds   []bool
+	Count    int
+	Centroid [dims]int32
 }
 
 func (rd *ReferenceData) Total() int {
 	t := 0
-	for i := 0; i < numPartitions; i++ {
+	for i := 0; i < numParts; i++ {
 		t += rd.Parts[i].Count
 	}
 	return t
 }
 
-func partitionKey(vec []int16) int {
-	key := 0
+func partKey(vec []int16) int {
+	k := 0
 	if vec[5] == -1 {
-		key |= 1 << 0
+		k |= 1
 	}
 	if vec[9] != 0 {
-		key |= 1 << 1
+		k |= 2
 	}
 	if vec[10] != 0 {
-		key |= 1 << 2
+		k |= 4
 	}
 	if vec[11] != 0 {
-		key |= 1 << 3
+		k |= 8
 	}
-	return key
-}
-
-func queryKey(query []int16) int {
-	return partitionKey(query)
+	return k
 }
 
 func LoadReferences(path string) (*ReferenceData, error) {
@@ -101,12 +102,9 @@ func LoadReferences(path string) (*ReferenceData, error) {
 		return nil, fmt.Errorf("expected array start: %w", err)
 	}
 
-	estimateCapacity := 3000000
-	perPart := estimateCapacity / numPartitions
-	rd := &ReferenceData{}
-	for i := 0; i < numPartitions; i++ {
-		rd.Parts[i].Vectors = make([]int16, 0, perPart*dims)
-		rd.Parts[i].Frauds = make([]bool, 0, perPart)
+	rawParts := make([][]rawVec, numParts)
+	for i := 0; i < numParts; i++ {
+		rawParts[i] = make([]rawVec, 0, 3000000/numParts)
 	}
 
 	for decoder.More() {
@@ -115,7 +113,7 @@ func LoadReferences(path string) (*ReferenceData, error) {
 			return nil, fmt.Errorf("decode record: %w", err)
 		}
 
-		vec := make([]int16, dims)
+		var vec [dims]int16
 		for i, v := range rec.Vector {
 			if v == -1 {
 				vec[i] = -1
@@ -130,10 +128,8 @@ func LoadReferences(path string) (*ReferenceData, error) {
 			}
 		}
 
-		k := partitionKey(vec)
-		rd.Parts[k].Vectors = append(rd.Parts[k].Vectors, vec...)
-		rd.Parts[k].Frauds = append(rd.Parts[k].Frauds, rec.Label == "fraud")
-		rd.Parts[k].Count++
+		k := partKey(vec[:])
+		rawParts[k] = append(rawParts[k], rawVec{data: vec, fraud: rec.Label == "fraud"})
 	}
 
 	_, err = decoder.Token()
@@ -141,13 +137,110 @@ func LoadReferences(path string) (*ReferenceData, error) {
 		return nil, fmt.Errorf("expected array end: %w", err)
 	}
 
+	rd := &ReferenceData{}
 	totalCount := 0
-	for i := 0; i < numPartitions; i++ {
-		totalCount += rd.Parts[i].Count
+	for p := 0; p < numParts; p++ {
+		n := len(rawParts[p])
+		rd.Parts[p].Count = n
+		totalCount += n
+		if n == 0 {
+			continue
+		}
+
+		clusterVectors(rawParts[p], &rd.Parts[p])
+		rawParts[p] = nil
 	}
-	fmt.Printf("Loaded %d reference vectors across %d partitions\n", totalCount, numPartitions)
+	fmt.Printf("Loaded %d reference vectors across %d partitions (clustered)\n", totalCount, numParts)
 
 	return rd, nil
+}
+
+func clusterVectors(raw []rawVec, part *partition) {
+	n := len(raw)
+	if n == 0 {
+		return
+	}
+
+	nClusters := clustersPerPart
+	if n < nClusters {
+		nClusters = n
+	}
+
+	centroids := make([][dims]int32, nClusters)
+	assignments := make([]int, n)
+
+	step := n / nClusters
+	if step < 1 {
+		step = 1
+	}
+	for c := 0; c < nClusters; c++ {
+		idx := c * step
+		if idx >= n {
+			idx = n - 1
+		}
+		for d := 0; d < dims; d++ {
+			centroids[c][d] = int32(raw[idx].data[d])
+		}
+	}
+
+	for iter := 0; iter < 2; iter++ {
+		for i := 0; i < n; i++ {
+			bestDist := int64(1<<62 - 1)
+			bestC := 0
+			v := raw[i].data
+			for c := 0; c < nClusters; c++ {
+				var sumSq int64
+				for d := 0; d < dims; d++ {
+					diff := int64(v[d]) - int64(centroids[c][d])
+					sumSq += diff * diff
+				}
+				if sumSq < bestDist {
+					bestDist = sumSq
+					bestC = c
+				}
+			}
+			assignments[i] = bestC
+		}
+
+		for c := 0; c < nClusters; c++ {
+			for d := 0; d < dims; d++ {
+				centroids[c][d] = 0
+			}
+		}
+		counts := make([]int, nClusters)
+		for i := 0; i < n; i++ {
+			c := assignments[i]
+			counts[c]++
+			for d := 0; d < dims; d++ {
+				centroids[c][d] += int32(raw[i].data[d])
+			}
+		}
+		for c := 0; c < nClusters; c++ {
+			if counts[c] > 0 {
+				for d := 0; d < dims; d++ {
+					centroids[c][d] = centroids[c][d] / int32(counts[c])
+				}
+			}
+		}
+	}
+
+	clusterCounts := make([]int, nClusters)
+	for i := 0; i < n; i++ {
+		clusterCounts[assignments[i]]++
+	}
+
+	for c := 0; c < nClusters; c++ {
+		part.Clusters[c].Vectors = make([]int16, 0, clusterCounts[c]*dims)
+		part.Clusters[c].Frauds = make([]bool, 0, clusterCounts[c])
+		part.Clusters[c].Centroid = centroids[c]
+	}
+
+	for i := 0; i < n; i++ {
+		c := assignments[i]
+		part.Clusters[c].Vectors = append(part.Clusters[c].Vectors, raw[i].data[:]...)
+		part.Clusters[c].Frauds = append(part.Clusters[c].Frauds, raw[i].fraud)
+		part.Clusters[c].Count++
+	}
 }
 
 func float64ToInt16(v float64) int16 {
@@ -164,224 +257,195 @@ func float64ToInt16(v float64) int16 {
 }
 
 func (rd *ReferenceData) FindNearest(query []float64) (fraudCount int, total int) {
-	query16 := make([]int16, dims)
+	var query16 [dims]int16
 	for i, v := range query {
 		query16[i] = float64ToInt16(v)
 	}
 
-	k := queryKey(query16)
-	part := &rd.Parts[k]
+	p := partKey(query16[:])
+	part := &rd.Parts[p]
 
 	if part.Count < topK {
-		return rd.searchAll(query16)
+		return 0, topK
 	}
 
-	return rd.searchPartition(query16, part)
-}
-
-func (rd *ReferenceData) searchPartition(query16 []int16, part *partition) (fraudCount int, total int) {
-	vectors := part.Vectors
-	frauds := part.Frauds
-	count := part.Count
-
-	numWorkers := runtime.GOMAXPROCS(0)
-	if numWorkers < 1 {
-		numWorkers = 1
-	}
-	chunkSize := (count + numWorkers - 1) / numWorkers
-
-	var wg sync.WaitGroup
-	results := make([]result, numWorkers)
-	for i := range results {
-		for j := 0; j < topK; j++ {
-			results[i].distances[j] = 1<<62 - 1
-			results[i].indices[j] = -1
-		}
+	nClusters := clustersPerPart
+	if part.Count < nClusters {
+		nClusters = part.Count
 	}
 
-	for w := 0; w < numWorkers; w++ {
-		start := w * chunkSize
-		end := start + chunkSize
-		if end > count {
-			end = count
-		}
-		if start >= end {
+	type clusterDist struct {
+		idx  int
+		dist int64
+	}
+
+	searchClusters := 5
+	if nClusters < searchClusters {
+		searchClusters = nClusters
+	}
+
+	topClusters := make([]clusterDist, searchClusters)
+	for i := range topClusters {
+		topClusters[i] = clusterDist{idx: -1, dist: 1<<62 - 1}
+	}
+
+	for c := 0; c < nClusters; c++ {
+		if part.Clusters[c].Count == 0 {
 			continue
 		}
-
-		wg.Add(1)
-		go func(worker, start, end int) {
-			defer wg.Done()
-			best := &results[worker]
-
-			for i := 0; i < topK; i++ {
-				best.distances[i] = 1<<62 - 1
-				best.indices[i] = -1
-			}
-
-			q0, q1, q2, q3, q4, q5, q6, q7 := query16[0], query16[1], query16[2], query16[3], query16[4], query16[5], query16[6], query16[7]
-			q8, q9, q10, q11, q12, q13 := query16[8], query16[9], query16[10], query16[11], query16[12], query16[13]
-
-			for idx := start; idx < end; idx++ {
-				base := idx * dims
-
-				worst := best.distances[topK-1]
-				var sumSq int64
-
-				d := int64(q0) - int64(vectors[base])
-				sumSq = d * d
-				if sumSq >= worst {
-					continue
-				}
-
-				d = int64(q1) - int64(vectors[base+1])
-				sumSq += d * d
-				if sumSq >= worst {
-					continue
-				}
-
-				d = int64(q2) - int64(vectors[base+2])
-				sumSq += d * d
-				if sumSq >= worst {
-					continue
-				}
-
-				d = int64(q3) - int64(vectors[base+3])
-				sumSq += d * d
-				if sumSq >= worst {
-					continue
-				}
-
-				d = int64(q4) - int64(vectors[base+4])
-				sumSq += d * d
-				if sumSq >= worst {
-					continue
-				}
-
-				d = int64(q5) - int64(vectors[base+5])
-				sumSq += d * d
-				if sumSq >= worst {
-					continue
-				}
-
-				d = int64(q6) - int64(vectors[base+6])
-				sumSq += d * d
-				if sumSq >= worst {
-					continue
-				}
-
-				d = int64(q7) - int64(vectors[base+7])
-				sumSq += d * d
-				if sumSq >= worst {
-					continue
-				}
-
-				d = int64(q8) - int64(vectors[base+8])
-				sumSq += d * d
-				if sumSq >= worst {
-					continue
-				}
-
-				d = int64(q9) - int64(vectors[base+9])
-				sumSq += d * d
-				if sumSq >= worst {
-					continue
-				}
-
-				d = int64(q10) - int64(vectors[base+10])
-				sumSq += d * d
-				if sumSq >= worst {
-					continue
-				}
-
-				d = int64(q11) - int64(vectors[base+11])
-				sumSq += d * d
-				if sumSq >= worst {
-					continue
-				}
-
-				d = int64(q12) - int64(vectors[base+12])
-				sumSq += d * d
-				if sumSq >= worst {
-					continue
-				}
-
-				d = int64(q13) - int64(vectors[base+13])
-				sumSq += d * d
-				if sumSq >= worst {
-					continue
-				}
-
-				j := topK - 1
-				for j > 0 && sumSq < best.distances[j-1] {
-					best.distances[j] = best.distances[j-1]
-					best.indices[j] = best.indices[j-1]
-					j--
-				}
-				best.distances[j] = sumSq
-				best.indices[j] = idx
-			}
-		}(w, start, end)
-	}
-
-	wg.Wait()
-
-	return mergeResults(results, frauds)
-}
-
-func (rd *ReferenceData) searchAll(query16 []int16) (fraudCount int, total int) {
-	allVectors := make([]int16, 0, 3000000*dims)
-	allFrauds := make([]bool, 0, 3000000)
-
-	for i := 0; i < numPartitions; i++ {
-		if rd.Parts[i].Count == 0 {
-			continue
+		cent := part.Clusters[c].Centroid
+		var sumSq int64
+		for d := 0; d < dims; d++ {
+			diff := int64(query16[d]) - int64(cent[d])
+			sumSq += diff * diff
 		}
-		allVectors = append(allVectors, rd.Parts[i].Vectors...)
-		allFrauds = append(allFrauds, rd.Parts[i].Frauds...)
+
+		j := searchClusters - 1
+		for j > 0 && sumSq < topClusters[j-1].dist {
+			topClusters[j] = topClusters[j-1]
+			j--
+		}
+		if sumSq < topClusters[searchClusters-1].dist {
+			topClusters[j] = clusterDist{idx: c, dist: sumSq}
+		}
 	}
 
-	p := &partition{
-		Vectors: allVectors,
-		Frauds:  allFrauds,
-		Count:   len(allFrauds),
-	}
-	return rd.searchPartition(query16, p)
-}
-
-func mergeResults(results []result, frauds []bool) (fraudCount int, total int) {
-	var finalBest [topK]int
-	var finalDist [topK]int64
+	var bestSlot [topK]int
+	var bestIdx [topK]int
+	var bestDist [topK]int64
 	for i := 0; i < topK; i++ {
-		finalDist[i] = 1<<62 - 1
-		finalBest[i] = -1
+		bestDist[i] = 1<<62 - 1
+		bestSlot[i] = -1
+		bestIdx[i] = -1
 	}
 
-	for _, r := range results {
-		for i := 0; i < topK; i++ {
-			if r.indices[i] == -1 {
-				continue
-			}
-			d := r.distances[i]
-			j := topK - 1
-			for j > 0 && d < finalDist[j-1] {
-				finalDist[j] = finalDist[j-1]
-				finalBest[j] = finalBest[j-1]
-				j--
-			}
-			if d < finalDist[topK-1] {
-				finalDist[j] = d
-				finalBest[j] = r.indices[i]
-			}
+	for i := 0; i < searchClusters; i++ {
+		c := topClusters[i].idx
+		cl := &part.Clusters[c]
+		if cl.Count == 0 {
+			continue
 		}
+		searchCluster(query16[:], cl.Vectors, cl.Count, c, &bestSlot, &bestIdx, &bestDist)
 	}
 
 	fraudCount = 0
 	for i := 0; i < topK; i++ {
-		if finalBest[i] >= 0 && frauds[finalBest[i]] {
+		if bestSlot[i] < 0 {
+			continue
+		}
+		if part.Clusters[bestSlot[i]].Frauds[bestIdx[i]] {
 			fraudCount++
 		}
 	}
 
 	return fraudCount, topK
+}
+
+func searchCluster(query []int16, vectors []int16, count int, clusterIdx int,
+	bestSlot *[topK]int, bestIdx *[topK]int, bestDist *[topK]int64) {
+
+	q0, q1, q2, q3, q4, q5, q6, q7 := query[0], query[1], query[2], query[3], query[4], query[5], query[6], query[7]
+	q8, q9, q10, q11, q12, q13 := query[8], query[9], query[10], query[11], query[12], query[13]
+
+	for idx := 0; idx < count; idx++ {
+		base := idx * dims
+
+		worst := bestDist[topK-1]
+		var sumSq int64
+
+		d := int64(q0) - int64(vectors[base])
+		sumSq = d * d
+		if sumSq >= worst {
+			continue
+		}
+
+		d = int64(q1) - int64(vectors[base+1])
+		sumSq += d * d
+		if sumSq >= worst {
+			continue
+		}
+
+		d = int64(q2) - int64(vectors[base+2])
+		sumSq += d * d
+		if sumSq >= worst {
+			continue
+		}
+
+		d = int64(q3) - int64(vectors[base+3])
+		sumSq += d * d
+		if sumSq >= worst {
+			continue
+		}
+
+		d = int64(q4) - int64(vectors[base+4])
+		sumSq += d * d
+		if sumSq >= worst {
+			continue
+		}
+
+		d = int64(q5) - int64(vectors[base+5])
+		sumSq += d * d
+		if sumSq >= worst {
+			continue
+		}
+
+		d = int64(q6) - int64(vectors[base+6])
+		sumSq += d * d
+		if sumSq >= worst {
+			continue
+		}
+
+		d = int64(q7) - int64(vectors[base+7])
+		sumSq += d * d
+		if sumSq >= worst {
+			continue
+		}
+
+		d = int64(q8) - int64(vectors[base+8])
+		sumSq += d * d
+		if sumSq >= worst {
+			continue
+		}
+
+		d = int64(q9) - int64(vectors[base+9])
+		sumSq += d * d
+		if sumSq >= worst {
+			continue
+		}
+
+		d = int64(q10) - int64(vectors[base+10])
+		sumSq += d * d
+		if sumSq >= worst {
+			continue
+		}
+
+		d = int64(q11) - int64(vectors[base+11])
+		sumSq += d * d
+		if sumSq >= worst {
+			continue
+		}
+
+		d = int64(q12) - int64(vectors[base+12])
+		sumSq += d * d
+		if sumSq >= worst {
+			continue
+		}
+
+		d = int64(q13) - int64(vectors[base+13])
+		sumSq += d * d
+		if sumSq >= worst {
+			continue
+		}
+
+		j := topK - 1
+		for j > 0 && sumSq < bestDist[j-1] {
+			bestDist[j] = bestDist[j-1]
+			bestSlot[j] = bestSlot[j-1]
+			bestIdx[j] = bestIdx[j-1]
+			j--
+		}
+		bestDist[j] = sumSq
+		bestSlot[j] = clusterIdx
+		bestIdx[j] = idx
+	}
 }
