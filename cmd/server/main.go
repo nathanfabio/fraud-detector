@@ -4,31 +4,37 @@ import (
 	"flag"
 	"fmt"
 	"log"
+	"net"
 	"net/http"
 	"os"
+	"runtime"
+	"runtime/debug"
 
 	"fraud-detector/internal/config"
 	"fraud-detector/internal/handler"
-	"fraud-detector/internal/search"
+	"fraud-detector/internal/index"
 )
 
 func main() {
-	preprocIn := flag.String("preproc-in", "", "Input JSON.GZ for preprocessing")
-	preprocOut := flag.String("preproc-out", "", "Output binary from preprocessing")
+	buildIndexIn := flag.String("build-index-in", "", "JSON.GZ to build index from")
+	buildIndexOut := flag.String("build-index-out", "", "Output path for built index")
 	flag.Parse()
 
-	if *preprocIn != "" && *preprocOut != "" {
-		log.Printf("Preprocessing %s -> %s", *preprocIn, *preprocOut)
-		if err := search.Preprocess(*preprocIn, *preprocOut); err != nil {
-			log.Fatalf("Preprocess failed: %v", err)
+	if *buildIndexIn != "" && *buildIndexOut != "" {
+		log.Printf("Building IVF index: %s -> %s", *buildIndexIn, *buildIndexOut)
+		if err := index.BuildIndex(*buildIndexIn, *buildIndexOut); err != nil {
+			log.Fatalf("Build failed: %v", err)
 		}
-		log.Println("Preprocessing complete")
+		log.Println("Index built successfully")
 		return
 	}
 
+	runtime.GOMAXPROCS(1)
+	debug.SetGCPercent(-1)
+
 	normCfg, err := config.LoadNormalization("resources/normalization.json")
 	if err != nil {
-		log.Fatalf("Failed to load normalization config: %v", err)
+		log.Fatalf("Failed to load normalization: %v", err)
 	}
 	mccRisk, err := config.LoadMCCRisk("resources/mcc_risk.json")
 	if err != nil {
@@ -41,28 +47,70 @@ func main() {
 	mux.HandleFunc("GET /ready", h.Ready)
 	mux.HandleFunc("POST /fraud-score", h.Score)
 
+	hostname, _ := os.Hostname()
+	sockPath := fmt.Sprintf("/run/sock/%s.sock", hostname)
+
+	var unixListener net.Listener
+	if err := os.MkdirAll("/run/sock", 0755); err == nil {
+		os.Remove(sockPath)
+		unixListener, err = net.Listen("unix", sockPath)
+		if err != nil {
+			log.Printf("Unix socket: %v", err)
+			unixListener = nil
+		} else {
+			log.Printf("Unix socket: %s", sockPath)
+		}
+	}
+
 	port := "8080"
 	if envPort := os.Getenv("PORT"); envPort != "" {
 		port = envPort
 	}
 
+	if unixListener != nil {
+		go func() {
+			srv := &http.Server{
+				Handler:           mux,
+				ReadHeaderTimeout: 250e6,
+				ReadTimeout:       250e6,
+				WriteTimeout:      250e6,
+				IdleTimeout:       30e9,
+			}
+			srv.Serve(unixListener)
+		}()
+	}
+
 	go func() {
-		refPath := "resources/references.bin"
-		if envPath := os.Getenv("REFERENCES_PATH"); envPath != "" {
-			refPath = envPath
+		indexPath := "resources/index.bin"
+		if envPath := os.Getenv("INDEX_PATH"); envPath != "" {
+			indexPath = envPath
 		}
-		log.Printf("Loading from %s...", refPath)
-		refData, err := search.LoadBinary(refPath)
+		log.Printf("Loading index from %s...", indexPath)
+		idx, err := index.LoadBinary(indexPath)
 		if err != nil {
-			log.Fatalf("Failed to load: %v", err)
+			log.Fatalf("Failed to load index: %v", err)
 		}
-		log.Printf("Loaded %d reference vectors, building index...", refData.Total())
-		refData.BuildIndex()
-		h.SetReady(refData)
+		log.Printf("Index loaded: %d vectors, %d clusters", len(idx.Vectors), idx.NumClusters)
+		h.SetIndex(idx)
+		h.Warmup()
+		log.Println("Warmup complete")
+		h.SetReady()
 	}()
 
-	log.Printf("Starting server on port %s", port)
-	if err := http.ListenAndServe(fmt.Sprintf(":%s", port), mux); err != nil {
+	tcpListener, err := net.Listen("tcp", fmt.Sprintf(":%s", port))
+	if err != nil {
+		log.Fatalf("TCP listen failed: %v", err)
+	}
+
+	srv := &http.Server{
+		Handler:           mux,
+		ReadHeaderTimeout: 250e6,
+		ReadTimeout:       250e6,
+		WriteTimeout:      250e6,
+		IdleTimeout:       30e9,
+	}
+	log.Printf("Server on TCP :%s", port)
+	if err := srv.Serve(tcpListener); err != nil {
 		log.Fatalf("Server error: %v", err)
 	}
 }
