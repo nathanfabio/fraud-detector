@@ -1,6 +1,7 @@
 package main
 
 import (
+	"flag"
 	"fmt"
 	"log"
 	"net/http"
@@ -12,6 +13,19 @@ import (
 )
 
 func main() {
+	preprocInput := flag.String("preproc-in", "", "Input JSON.GZ file for preprocessing")
+	preprocOutput := flag.String("preproc-out", "", "Output binary file from preprocessing")
+	flag.Parse()
+
+	if *preprocInput != "" && *preprocOutput != "" {
+		log.Printf("Preprocessing %s -> %s", *preprocInput, *preprocOutput)
+		if err := search.Preprocess(*preprocInput, *preprocOutput); err != nil {
+			log.Fatalf("Preprocess failed: %v", err)
+		}
+		log.Println("Preprocessing complete")
+		return
+	}
+
 	normCfg, err := config.LoadNormalization("resources/normalization.json")
 	if err != nil {
 		log.Fatalf("Failed to load normalization config: %v", err)
@@ -34,21 +48,17 @@ func main() {
 	}
 
 	go func() {
-		refPath := "resources/references.json.gz"
+		refPath := "resources/references.bin"
 		if envPath := os.Getenv("REFERENCES_PATH"); envPath != "" {
 			refPath = envPath
 		}
-		log.Println("Loading reference dataset...")
-		refData, err := search.LoadReferences(refPath)
+		log.Printf("Loading reference dataset from %s...", refPath)
+		refData, err := search.LoadBinary(refPath)
 		if err != nil {
 			log.Fatalf("Failed to load references: %v", err)
 		}
 		log.Printf("Loaded %d reference vectors", refData.Total())
 		h.SetReady(refData)
-
-		log.Println("Building sorted index in background...")
-		refData.BuildIndex()
-		log.Println("Sorted index ready")
 	}()
 
 	log.Printf("Starting server on port %s", port)
