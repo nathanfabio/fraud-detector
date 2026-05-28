@@ -22,19 +22,7 @@ func main() {
 		log.Fatalf("Failed to load MCC risk: %v", err)
 	}
 
-	refPath := "resources/references.json.gz"
-	if envPath := os.Getenv("REFERENCES_PATH"); envPath != "" {
-		refPath = envPath
-	}
-
-	log.Println("Loading reference dataset...")
-	refData, err := search.LoadReferences(refPath)
-	if err != nil {
-		log.Fatalf("Failed to load references: %v", err)
-	}
-	log.Printf("Loaded %d reference vectors", refData.Count)
-
-	h := handler.New(normCfg, mccRisk, refData)
+	h := handler.New(normCfg, mccRisk, nil)
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /ready", h.Ready)
@@ -44,6 +32,20 @@ func main() {
 	if envPort := os.Getenv("PORT"); envPort != "" {
 		port = envPort
 	}
+
+	go func() {
+		refPath := "resources/references.json.gz"
+		if envPath := os.Getenv("REFERENCES_PATH"); envPath != "" {
+			refPath = envPath
+		}
+		log.Println("Loading reference dataset...")
+		refData, err := search.LoadReferences(refPath)
+		if err != nil {
+			log.Fatalf("Failed to load references: %v", err)
+		}
+		log.Printf("Loaded %d reference vectors", refData.Count)
+		h.SetReady(refData)
+	}()
 
 	log.Printf("Starting server on port %s", port)
 	if err := http.ListenAndServe(fmt.Sprintf(":%s", port), mux); err != nil {

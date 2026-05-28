@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"sync/atomic"
 
 	"fraud-detector/internal/config"
 	"fraud-detector/internal/search"
@@ -25,22 +26,41 @@ type FraudHandler struct {
 	Config  *config.Normalization
 	MCCRisk map[string]float64
 	RefData *search.ReferenceData
+	ready   atomic.Bool
 }
 
 func New(cfg *config.Normalization, mccRisk map[string]float64, refData *search.ReferenceData) *FraudHandler {
-	return &FraudHandler{
+	h := &FraudHandler{
 		Config:  cfg,
 		MCCRisk: mccRisk,
 		RefData: refData,
 	}
+	if refData != nil {
+		h.ready.Store(true)
+	}
+	return h
+}
+
+func (h *FraudHandler) SetReady(refData *search.ReferenceData) {
+	h.RefData = refData
+	h.ready.Store(true)
 }
 
 func (h *FraudHandler) Ready(w http.ResponseWriter, _ *http.Request) {
-	w.WriteHeader(http.StatusOK)
-	w.Write([]byte("OK"))
+	if h.ready.Load() {
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte("OK"))
+		return
+	}
+	w.WriteHeader(http.StatusServiceUnavailable)
 }
 
 func (h *FraudHandler) Score(w http.ResponseWriter, r *http.Request) {
+	if !h.ready.Load() {
+		w.WriteHeader(http.StatusServiceUnavailable)
+		return
+	}
+
 	var req vectorizer.Request
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, "invalid request body", http.StatusBadRequest)
