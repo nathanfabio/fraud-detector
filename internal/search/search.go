@@ -2,6 +2,7 @@ package search
 
 import (
 	"compress/gzip"
+	"encoding/binary"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -13,6 +14,7 @@ const topK = 5
 const int16Scale = 32767
 const numParts = 16
 const windowSize = 50000
+const magic = 0x46524546
 
 type ReferenceData struct {
 	Parts [numParts]partition
@@ -33,48 +35,31 @@ func (rd *ReferenceData) Total() int {
 	return t
 }
 
-func partKey(vec []int16) int {
-	k := 0
-	if vec[5] == -1 {
-		k |= 1
-	}
-	if vec[9] != 0 {
-		k |= 2
-	}
-	if vec[10] != 0 {
-		k |= 4
-	}
-	if vec[11] != 0 {
-		k |= 8
-	}
-	return k
-}
-
-func LoadReferences(path string) (*ReferenceData, error) {
-	f, err := os.Open(path)
+func Preprocess(inputPath, outputPath string) error {
+	in, err := os.Open(inputPath)
 	if err != nil {
-		return nil, fmt.Errorf("open: %w", err)
+		return fmt.Errorf("open input: %w", err)
 	}
-	defer f.Close()
+	defer in.Close()
 
-	var reader io.Reader = f
+	var reader io.Reader = in
 	buf := make([]byte, 2)
-	if _, err := io.ReadFull(f, buf); err != nil {
-		return nil, fmt.Errorf("read header: %w", err)
+	if _, err := io.ReadFull(in, buf); err != nil {
+		return fmt.Errorf("read header: %w", err)
 	}
 	if buf[0] == 0x1f && buf[1] == 0x8b {
-		if _, err := f.Seek(0, io.SeekStart); err != nil {
-			return nil, fmt.Errorf("seek: %w", err)
+		if _, err := in.Seek(0, io.SeekStart); err != nil {
+			return fmt.Errorf("seek: %w", err)
 		}
-		gz, err := gzip.NewReader(f)
+		gz, err := gzip.NewReader(in)
 		if err != nil {
-			return nil, fmt.Errorf("gzip: %w", err)
+			return fmt.Errorf("gzip: %w", err)
 		}
 		defer gz.Close()
 		reader = gz
 	} else {
-		if _, err := f.Seek(0, io.SeekStart); err != nil {
-			return nil, fmt.Errorf("seek: %w", err)
+		if _, err := in.Seek(0, io.SeekStart); err != nil {
+			return fmt.Errorf("seek: %w", err)
 		}
 	}
 
@@ -85,21 +70,22 @@ func LoadReferences(path string) (*ReferenceData, error) {
 
 	decoder := json.NewDecoder(reader)
 	if _, err := decoder.Token(); err != nil {
-		return nil, fmt.Errorf("array start: %w", err)
+		return fmt.Errorf("array start: %w", err)
 	}
 
-	rd := &ReferenceData{}
-	for i := 0; i < numParts; i++ {
-		rd.Parts[i].Vectors = make([]int16, 0, 3000000/numParts*dims)
-		rd.Parts[i].Frauds = make([]bool, 0, 3000000/numParts)
+	type record struct {
+		vec   [dims]int16
+		fraud bool
 	}
+	parts := make([][]record, numParts)
+	var counts [numParts]int32
 
 	for decoder.More() {
 		var r ref
 		if err := decoder.Decode(&r); err != nil {
-			return nil, fmt.Errorf("decode: %w", err)
+			return fmt.Errorf("decode: %w", err)
 		}
-		vec := make([]int16, dims)
+		var vec [dims]int16
 		for i, v := range r.Vector {
 			if v == -1 {
 				vec[i] = -1
@@ -113,47 +99,162 @@ func LoadReferences(path string) (*ReferenceData, error) {
 				vec[i] = int16(v*int16Scale + 0.5)
 			}
 		}
-		k := partKey(vec)
-		rd.Parts[k].Vectors = append(rd.Parts[k].Vectors, vec...)
-		rd.Parts[k].Frauds = append(rd.Parts[k].Frauds, r.Label == "fraud")
-		rd.Parts[k].Count++
+		k := 0
+		if vec[5] == -1 {
+			k |= 1
+		}
+		if vec[9] != 0 {
+			k |= 2
+		}
+		if vec[10] != 0 {
+			k |= 4
+		}
+		if vec[11] != 0 {
+			k |= 8
+		}
+		counts[k]++
+		parts[k] = append(parts[k], record{vec, r.Label == "fraud"})
 	}
 
 	if _, err := decoder.Token(); err != nil {
-		return nil, fmt.Errorf("array end: %w", err)
+		return fmt.Errorf("array end: %w", err)
 	}
 
-	totalCount := 0
+	out, err := os.Create(outputPath)
+	if err != nil {
+		return fmt.Errorf("create output: %w", err)
+	}
+	defer out.Close()
+
+	header := make([]byte, 12)
+	binary.LittleEndian.PutUint32(header[0:4], magic)
+	total := int32(0)
 	for i := 0; i < numParts; i++ {
-		totalCount += rd.Parts[i].Count
+		total += counts[i]
+	}
+	binary.LittleEndian.PutUint32(header[4:8], uint32(total))
+	if _, err := out.Write(header); err != nil {
+		return err
+	}
+
+	for i := 0; i < numParts; i++ {
+		binary.LittleEndian.PutUint32(header[0:4], uint32(counts[i]))
+		if _, err := out.Write(header[:4]); err != nil {
+			return err
+		}
+	}
+
+	for i := 0; i < numParts; i++ {
+		for _, rec := range parts[i] {
+			for d := 0; d < dims; d++ {
+				binary.LittleEndian.PutUint16(buf[0:2], uint16(rec.vec[d]))
+				if _, err := out.Write(buf[:2]); err != nil {
+					return err
+				}
+			}
+		}
+		for _, rec := range parts[i] {
+			b := byte(0)
+			if rec.fraud {
+				b = 1
+			}
+			if _, err := out.Write([]byte{b}); err != nil {
+				return err
+			}
+		}
+	}
+
+	fmt.Printf("Preprocessed %d vectors to %s\n", total, outputPath)
+	return nil
+}
+
+func LoadBinary(path string) (*ReferenceData, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, fmt.Errorf("open: %w", err)
+	}
+	defer f.Close()
+
+	header := make([]byte, 12)
+	if _, err := io.ReadFull(f, header); err != nil {
+		return nil, fmt.Errorf("read header: %w", err)
+	}
+	if binary.LittleEndian.Uint32(header[0:4]) != magic {
+		return nil, fmt.Errorf("invalid magic")
+	}
+
+	rd := &ReferenceData{}
+	var counts [numParts]int32
+	for i := 0; i < numParts; i++ {
+		if _, err := io.ReadFull(f, header[:4]); err != nil {
+			return nil, fmt.Errorf("read count %d: %w", i, err)
+		}
+		counts[i] = int32(binary.LittleEndian.Uint32(header[:4]))
+	}
+
+	for i := 0; i < numParts; i++ {
+		n := int(counts[i])
+		rd.Parts[i].Count = n
+		if n == 0 {
+			continue
+		}
+		rd.Parts[i].Vectors = make([]int16, n*dims)
+		rd.Parts[i].Frauds = make([]bool, n)
+	}
+
+	for i := 0; i < numParts; i++ {
+		n := int(counts[i])
+		if n == 0 {
+			continue
+		}
+
+		vecBytes := make([]byte, n*dims*2)
+		if _, err := io.ReadFull(f, vecBytes); err != nil {
+			return nil, fmt.Errorf("read vectors %d: %w", i, err)
+		}
+		for j := 0; j < n*dims; j++ {
+			rd.Parts[i].Vectors[j] = int16(binary.LittleEndian.Uint16(vecBytes[j*2 : (j+1)*2]))
+		}
+
+		fraudBytes := make([]byte, n)
+		if _, err := io.ReadFull(f, fraudBytes); err != nil {
+			return nil, fmt.Errorf("read frauds %d: %w", i, err)
+		}
+		for j := 0; j < n; j++ {
+			rd.Parts[i].Frauds[j] = fraudBytes[j] != 0
+		}
+	}
+
+	fmt.Printf("Loaded %d vectors across %d partitions from binary\n", rd.Total(), numParts)
+	return rd, nil
+}
+
+func (rd *ReferenceData) BuildIndex() {
+	for i := 0; i < numParts; i++ {
 		if rd.Parts[i].Count > 0 {
 			rd.Parts[i].Sorted = makeSortedIndex(rd.Parts[i].Vectors, rd.Parts[i].Count)
 		}
 	}
-	fmt.Printf("Loaded %d reference vectors across %d partitions (indexed)\n", totalCount, numParts)
-	return rd, nil
+	fmt.Println("Index built")
 }
 
 func makeSortedIndex(vectors []int16, count int) []int32 {
-	const bucketCount = 65536
-	buckets := make([]int32, bucketCount)
+	const buckets = 65536
+	offsets := make([]int32, buckets)
 	for i := 0; i < count; i++ {
-		v := uint16(vectors[i*dims])
-		buckets[v]++
+		offsets[uint16(vectors[i*dims])]++
 	}
-
 	var total int32
-	for i := 0; i < bucketCount; i++ {
-		t := buckets[i]
-		buckets[i] = total
+	for i := 0; i < buckets; i++ {
+		t := offsets[i]
+		offsets[i] = total
 		total += t
 	}
-
 	idx := make([]int32, count)
 	for i := 0; i < count; i++ {
 		v := uint16(vectors[i*dims])
-		pos := buckets[v]
-		buckets[v]++
+		pos := offsets[v]
+		offsets[v]++
 		idx[pos] = int32(i)
 	}
 	return idx
@@ -178,17 +279,15 @@ func (rd *ReferenceData) FindNearest(query []float64) (fraudCount int, total int
 		query16[i] = float64ToInt16(v)
 	}
 
-	p := partKey(query16[:])
-	part := &rd.Parts[p]
-
+	k := partKey(query16[:])
+	part := &rd.Parts[k]
 	if part.Count < topK {
 		return 0, topK
 	}
 
 	sorted := part.Sorted
 	vectors := part.Vectors
-
-	start := searchSorted(sorted, vectors, part.Count, query16[0])
+	start := binSearch(sorted, vectors, part.Count, query16[0])
 
 	var bestSlot [topK]int
 	var bestIdx [topK]int
@@ -222,7 +321,6 @@ func (rd *ReferenceData) FindNearest(query []float64) (fraudCount int, total int
 	for i := lo; i < hi; i++ {
 		idx := int(sorted[i])
 		base := idx * dims
-
 		worst := bestDist[topK-1]
 		var sumSq int64
 
@@ -321,7 +419,24 @@ func (rd *ReferenceData) FindNearest(query []float64) (fraudCount int, total int
 	return fraudCount, topK
 }
 
-func searchSorted(sorted []int32, vectors []int16, count int, target int16) int {
+func partKey(vec []int16) int {
+	k := 0
+	if vec[5] == -1 {
+		k |= 1
+	}
+	if vec[9] != 0 {
+		k |= 2
+	}
+	if vec[10] != 0 {
+		k |= 4
+	}
+	if vec[11] != 0 {
+		k |= 8
+	}
+	return k
+}
+
+func binSearch(sorted []int32, vectors []int16, count int, target int16) int {
 	lo, hi := 0, count
 	for lo < hi {
 		mid := (lo + hi) / 2
