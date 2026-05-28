@@ -13,11 +13,50 @@ import (
 const dims = 14
 const topK = 5
 const int16Scale = 32767
+const numPartitions = 16
+
+type result struct {
+	indices   [topK]int
+	distances [topK]int64
+}
 
 type ReferenceData struct {
+	Parts [numPartitions]partition
+}
+
+type partition struct {
 	Vectors []int16
 	Frauds  []bool
 	Count   int
+}
+
+func (rd *ReferenceData) Total() int {
+	t := 0
+	for i := 0; i < numPartitions; i++ {
+		t += rd.Parts[i].Count
+	}
+	return t
+}
+
+func partitionKey(vec []int16) int {
+	key := 0
+	if vec[5] == -1 {
+		key |= 1 << 0
+	}
+	if vec[9] != 0 {
+		key |= 1 << 1
+	}
+	if vec[10] != 0 {
+		key |= 1 << 2
+	}
+	if vec[11] != 0 {
+		key |= 1 << 3
+	}
+	return key
+}
+
+func queryKey(query []int16) int {
+	return partitionKey(query)
 }
 
 func LoadReferences(path string) (*ReferenceData, error) {
@@ -63,8 +102,12 @@ func LoadReferences(path string) (*ReferenceData, error) {
 	}
 
 	estimateCapacity := 3000000
-	vectors := make([]int16, 0, estimateCapacity*dims)
-	frauds := make([]bool, 0, estimateCapacity)
+	perPart := estimateCapacity / numPartitions
+	rd := &ReferenceData{}
+	for i := 0; i < numPartitions; i++ {
+		rd.Parts[i].Vectors = make([]int16, 0, perPart*dims)
+		rd.Parts[i].Frauds = make([]bool, 0, perPart)
+	}
 
 	for decoder.More() {
 		var rec refRecord
@@ -72,9 +115,10 @@ func LoadReferences(path string) (*ReferenceData, error) {
 			return nil, fmt.Errorf("decode record: %w", err)
 		}
 
-		for _, v := range rec.Vector {
+		vec := make([]int16, dims)
+		for i, v := range rec.Vector {
 			if v == -1 {
-				vectors = append(vectors, -1)
+				vec[i] = -1
 			} else {
 				if v < 0 {
 					v = 0
@@ -82,11 +126,14 @@ func LoadReferences(path string) (*ReferenceData, error) {
 				if v > 1 {
 					v = 1
 				}
-				vectors = append(vectors, int16(v*int16Scale+0.5))
+				vec[i] = int16(v*int16Scale + 0.5)
 			}
 		}
 
-		frauds = append(frauds, rec.Label == "fraud")
+		k := partitionKey(vec)
+		rd.Parts[k].Vectors = append(rd.Parts[k].Vectors, vec...)
+		rd.Parts[k].Frauds = append(rd.Parts[k].Frauds, rec.Label == "fraud")
+		rd.Parts[k].Count++
 	}
 
 	_, err = decoder.Token()
@@ -94,14 +141,13 @@ func LoadReferences(path string) (*ReferenceData, error) {
 		return nil, fmt.Errorf("expected array end: %w", err)
 	}
 
-	count := len(frauds)
-	fmt.Printf("Loaded %d reference vectors\n", count)
+	totalCount := 0
+	for i := 0; i < numPartitions; i++ {
+		totalCount += rd.Parts[i].Count
+	}
+	fmt.Printf("Loaded %d reference vectors across %d partitions\n", totalCount, numPartitions)
 
-	return &ReferenceData{
-		Vectors: vectors,
-		Frauds:  frauds,
-		Count:   count,
-	}, nil
+	return rd, nil
 }
 
 func float64ToInt16(v float64) int16 {
@@ -123,25 +169,41 @@ func (rd *ReferenceData) FindNearest(query []float64) (fraudCount int, total int
 		query16[i] = float64ToInt16(v)
 	}
 
+	k := queryKey(query16)
+	part := &rd.Parts[k]
+
+	if part.Count < topK {
+		return rd.searchAll(query16)
+	}
+
+	return rd.searchPartition(query16, part)
+}
+
+func (rd *ReferenceData) searchPartition(query16 []int16, part *partition) (fraudCount int, total int) {
+	vectors := part.Vectors
+	frauds := part.Frauds
+	count := part.Count
+
 	numWorkers := runtime.GOMAXPROCS(0)
 	if numWorkers < 1 {
 		numWorkers = 1
 	}
-	chunkSize := (rd.Count + numWorkers - 1) / numWorkers
-
-	type result struct {
-		indices   [topK]int
-		distances [topK]int64
-	}
+	chunkSize := (count + numWorkers - 1) / numWorkers
 
 	var wg sync.WaitGroup
 	results := make([]result, numWorkers)
+	for i := range results {
+		for j := 0; j < topK; j++ {
+			results[i].distances[j] = 1<<62 - 1
+			results[i].indices[j] = -1
+		}
+	}
 
 	for w := 0; w < numWorkers; w++ {
 		start := w * chunkSize
 		end := start + chunkSize
-		if end > rd.Count {
-			end = rd.Count
+		if end > count {
+			end = count
 		}
 		if start >= end {
 			continue
@@ -150,37 +212,103 @@ func (rd *ReferenceData) FindNearest(query []float64) (fraudCount int, total int
 		wg.Add(1)
 		go func(worker, start, end int) {
 			defer wg.Done()
-			best := results[worker]
+			best := &results[worker]
 
 			for i := 0; i < topK; i++ {
 				best.distances[i] = 1<<62 - 1
 				best.indices[i] = -1
 			}
 
-			refs := rd.Vectors
+			q0, q1, q2, q3, q4, q5, q6, q7 := query16[0], query16[1], query16[2], query16[3], query16[4], query16[5], query16[6], query16[7]
+			q8, q9, q10, q11, q12, q13 := query16[8], query16[9], query16[10], query16[11], query16[12], query16[13]
+
 			for idx := start; idx < end; idx++ {
 				base := idx * dims
 
-				d0 := int64(query16[0]) - int64(refs[base])
-				d1 := int64(query16[1]) - int64(refs[base+1])
-				d2 := int64(query16[2]) - int64(refs[base+2])
-				d3 := int64(query16[3]) - int64(refs[base+3])
-				d4 := int64(query16[4]) - int64(refs[base+4])
-				d5 := int64(query16[5]) - int64(refs[base+5])
-				d6 := int64(query16[6]) - int64(refs[base+6])
-				d7 := int64(query16[7]) - int64(refs[base+7])
-				d8 := int64(query16[8]) - int64(refs[base+8])
-				d9 := int64(query16[9]) - int64(refs[base+9])
-				d10 := int64(query16[10]) - int64(refs[base+10])
-				d11 := int64(query16[11]) - int64(refs[base+11])
-				d12 := int64(query16[12]) - int64(refs[base+12])
-				d13 := int64(query16[13]) - int64(refs[base+13])
+				worst := best.distances[topK-1]
+				var sumSq int64
 
-				sumSq := d0*d0 + d1*d1 + d2*d2 + d3*d3 + d4*d4 +
-					d5*d5 + d6*d6 + d7*d7 + d8*d8 + d9*d9 +
-					d10*d10 + d11*d11 + d12*d12 + d13*d13
+				d := int64(q0) - int64(vectors[base])
+				sumSq = d * d
+				if sumSq >= worst {
+					continue
+				}
 
-				if sumSq >= best.distances[topK-1] {
+				d = int64(q1) - int64(vectors[base+1])
+				sumSq += d * d
+				if sumSq >= worst {
+					continue
+				}
+
+				d = int64(q2) - int64(vectors[base+2])
+				sumSq += d * d
+				if sumSq >= worst {
+					continue
+				}
+
+				d = int64(q3) - int64(vectors[base+3])
+				sumSq += d * d
+				if sumSq >= worst {
+					continue
+				}
+
+				d = int64(q4) - int64(vectors[base+4])
+				sumSq += d * d
+				if sumSq >= worst {
+					continue
+				}
+
+				d = int64(q5) - int64(vectors[base+5])
+				sumSq += d * d
+				if sumSq >= worst {
+					continue
+				}
+
+				d = int64(q6) - int64(vectors[base+6])
+				sumSq += d * d
+				if sumSq >= worst {
+					continue
+				}
+
+				d = int64(q7) - int64(vectors[base+7])
+				sumSq += d * d
+				if sumSq >= worst {
+					continue
+				}
+
+				d = int64(q8) - int64(vectors[base+8])
+				sumSq += d * d
+				if sumSq >= worst {
+					continue
+				}
+
+				d = int64(q9) - int64(vectors[base+9])
+				sumSq += d * d
+				if sumSq >= worst {
+					continue
+				}
+
+				d = int64(q10) - int64(vectors[base+10])
+				sumSq += d * d
+				if sumSq >= worst {
+					continue
+				}
+
+				d = int64(q11) - int64(vectors[base+11])
+				sumSq += d * d
+				if sumSq >= worst {
+					continue
+				}
+
+				d = int64(q12) - int64(vectors[base+12])
+				sumSq += d * d
+				if sumSq >= worst {
+					continue
+				}
+
+				d = int64(q13) - int64(vectors[base+13])
+				sumSq += d * d
+				if sumSq >= worst {
 					continue
 				}
 
@@ -193,13 +321,35 @@ func (rd *ReferenceData) FindNearest(query []float64) (fraudCount int, total int
 				best.distances[j] = sumSq
 				best.indices[j] = idx
 			}
-
-			results[worker] = best
 		}(w, start, end)
 	}
 
 	wg.Wait()
 
+	return mergeResults(results, frauds)
+}
+
+func (rd *ReferenceData) searchAll(query16 []int16) (fraudCount int, total int) {
+	allVectors := make([]int16, 0, 3000000*dims)
+	allFrauds := make([]bool, 0, 3000000)
+
+	for i := 0; i < numPartitions; i++ {
+		if rd.Parts[i].Count == 0 {
+			continue
+		}
+		allVectors = append(allVectors, rd.Parts[i].Vectors...)
+		allFrauds = append(allFrauds, rd.Parts[i].Frauds...)
+	}
+
+	p := &partition{
+		Vectors: allVectors,
+		Frauds:  allFrauds,
+		Count:   len(allFrauds),
+	}
+	return rd.searchPartition(query16, p)
+}
+
+func mergeResults(results []result, frauds []bool) (fraudCount int, total int) {
 	var finalBest [topK]int
 	var finalDist [topK]int64
 	for i := 0; i < topK; i++ {
@@ -228,7 +378,7 @@ func (rd *ReferenceData) FindNearest(query []float64) (fraudCount int, total int
 
 	fraudCount = 0
 	for i := 0; i < topK; i++ {
-		if finalBest[i] >= 0 && rd.Frauds[finalBest[i]] {
+		if finalBest[i] >= 0 && frauds[finalBest[i]] {
 			fraudCount++
 		}
 	}
