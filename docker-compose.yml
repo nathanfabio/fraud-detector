@@ -18,8 +18,6 @@ services:
     environment:
       - PORT=8080
       - GOMEMLIMIT=150MiB
-      - GOGC=off
-      - GOMAXPROCS=1
     networks:
       - app-net
     mem_limit: 160m
@@ -30,8 +28,6 @@ services:
     environment:
       - PORT=8080
       - GOMEMLIMIT=150MiB
-      - GOGC=off
-      - GOMAXPROCS=1
     networks:
       - app-net
     mem_limit: 160m
