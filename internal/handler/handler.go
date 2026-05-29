@@ -41,8 +41,9 @@ func (h *FraudHandler) SetReady() {
 
 func (h *FraudHandler) Ready(w http.ResponseWriter, _ *http.Request) {
 	if h.ready.Load() {
+		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
-		w.Write([]byte("OK"))
+		w.Write([]byte(`{"ready":true,"build":"v3-s16-p1-s2000"}`))
 		return
 	}
 	w.WriteHeader(http.StatusServiceUnavailable)
