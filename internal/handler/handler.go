@@ -2,7 +2,6 @@ package handler
 
 import (
 	"encoding/json"
-	"io"
 	"net/http"
 	"sync/atomic"
 
@@ -24,7 +23,7 @@ func New(cfg *config.Normalization, mccRisk map[string]float64, idx *index.IVFIn
 		normCfg:   cfg,
 		mccRisk:   mccRisk,
 		index:     idx,
-		semaphore: make(chan struct{}, 1024),
+		semaphore: make(chan struct{}, 128),
 	}
 	if idx != nil {
 		h.ready.Store(true)
@@ -63,15 +62,8 @@ func (h *FraudHandler) Score(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	body, err := io.ReadAll(r.Body)
-	r.Body.Close()
-	if err != nil {
-		w.WriteHeader(http.StatusBadRequest)
-		return
-	}
-
 	var req vectorizer.Request
-	if err := json.Unmarshal(body, &req); err != nil {
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		w.WriteHeader(http.StatusBadRequest)
 		return
 	}

@@ -7,7 +7,6 @@ import (
 	"net"
 	"net/http"
 	"os"
-	"runtime"
 	"runtime/debug"
 
 	"fraud-detector/internal/config"
@@ -29,8 +28,8 @@ func main() {
 		return
 	}
 
-	runtime.GOMAXPROCS(1)
-	debug.SetGCPercent(-1)
+	debug.SetGCPercent(50)
+	debug.SetMemoryLimit(140 * 1024 * 1024)
 
 	normCfg, err := config.LoadNormalization("resources/normalization.json")
 	if err != nil {
@@ -71,9 +70,9 @@ func main() {
 		go func() {
 			srv := &http.Server{
 				Handler:           mux,
-				ReadHeaderTimeout: 250e6,
-				ReadTimeout:       250e6,
-				WriteTimeout:      250e6,
+				ReadHeaderTimeout: 5e9,
+				ReadTimeout:       10e9,
+				WriteTimeout:      10e9,
 				IdleTimeout:       30e9,
 			}
 			srv.Serve(unixListener)
@@ -104,9 +103,9 @@ func main() {
 
 	srv := &http.Server{
 		Handler:           mux,
-		ReadHeaderTimeout: 250e6,
-		ReadTimeout:       250e6,
-		WriteTimeout:      250e6,
+		ReadHeaderTimeout: 5e9,
+		ReadTimeout:       10e9,
+		WriteTimeout:      10e9,
 		IdleTimeout:       30e9,
 	}
 	log.Printf("Server on TCP :%s", port)
