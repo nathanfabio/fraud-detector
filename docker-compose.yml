@@ -14,7 +14,7 @@ services:
     cpus: "0.2"
 
   api1:
-    image: nathanfabio/fraud-detector4:c403b60
+    image: nathanfabio/fraud-detector4:4abc8ed
     environment:
       - PORT=8080
       - GOMEMLIMIT=150MiB
@@ -24,7 +24,7 @@ services:
     cpus: "0.4"
 
   api2:
-    image: nathanfabio/fraud-detector4:c403b60
+    image: nathanfabio/fraud-detector4:4abc8ed
     environment:
       - PORT=8080
       - GOMEMLIMIT=150MiB
