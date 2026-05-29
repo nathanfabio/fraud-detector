@@ -23,7 +23,7 @@ func New(cfg *config.Normalization, mccRisk map[string]float64, idx *index.IVFIn
 		normCfg:   cfg,
 		mccRisk:   mccRisk,
 		index:     idx,
-		semaphore: make(chan struct{}, 128),
+		semaphore: make(chan struct{}, 16),
 	}
 	if idx != nil {
 		h.ready.Store(true)
@@ -81,9 +81,10 @@ func (h *FraudHandler) Score(w http.ResponseWriter, r *http.Request) {
 		FraudScore float64 `json:"fraud_score"`
 	}{approved, score}
 
+	data, _ := json.Marshal(resp)
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
-	json.NewEncoder(w).Encode(resp)
+	w.Write(data)
 }
 
 func (h *FraudHandler) Warmup() {

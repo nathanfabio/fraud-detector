@@ -15,8 +15,8 @@ import (
 const dims = 14
 const topK = 5
 const numClusters = 1000
-const nprobe = 2
-const maxScanPerCluster = 5000
+const nprobe = 1
+const maxScanPerCluster = 2000
 const ivfMagic = 0x00415649
 
 type Vector [dims]int8
