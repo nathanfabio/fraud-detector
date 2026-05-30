@@ -50,13 +50,14 @@ func main() {
 	sockPath := fmt.Sprintf("/run/sock/%s.sock", hostname)
 
 	var unixListener net.Listener
-	if err := os.MkdirAll("/run/sock", 0755); err == nil {
+	if err := os.MkdirAll("/run/sock", 0777); err == nil {
 		os.Remove(sockPath)
 		unixListener, err = net.Listen("unix", sockPath)
 		if err != nil {
 			log.Printf("Unix socket: %v", err)
 			unixListener = nil
 		} else {
+			os.Chmod(sockPath, 0666)
 			log.Printf("Unix socket: %s", sockPath)
 		}
 	}

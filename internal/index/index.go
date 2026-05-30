@@ -15,8 +15,8 @@ import (
 const dims = 14
 const topK = 5
 const numClusters = 1000
-const nprobe = 1
-const maxScanPerCluster = 2000
+const nprobe = 2
+const maxScanPerCluster = 1000
 const ivfMagic = 0x00415649
 
 type Vector [dims]int8
@@ -326,89 +326,13 @@ func (idx *IVFIndex) Search(query *Vector) int {
 
 func manhattanDist(a, b Vector) int32 {
 	var sum int32
-	da := int32(a[0]) - int32(b[0])
-	if da < 0 {
-		sum -= da
-	} else {
-		sum += da
-	}
-	da = int32(a[1]) - int32(b[1])
-	if da < 0 {
-		sum -= da
-	} else {
-		sum += da
-	}
-	da = int32(a[2]) - int32(b[2])
-	if da < 0 {
-		sum -= da
-	} else {
-		sum += da
-	}
-	da = int32(a[3]) - int32(b[3])
-	if da < 0 {
-		sum -= da
-	} else {
-		sum += da
-	}
-	da = int32(a[4]) - int32(b[4])
-	if da < 0 {
-		sum -= da
-	} else {
-		sum += da
-	}
-	da = int32(a[5]) - int32(b[5])
-	if da < 0 {
-		sum -= da
-	} else {
-		sum += da
-	}
-	da = int32(a[6]) - int32(b[6])
-	if da < 0 {
-		sum -= da
-	} else {
-		sum += da
-	}
-	da = int32(a[7]) - int32(b[7])
-	if da < 0 {
-		sum -= da
-	} else {
-		sum += da
-	}
-	da = int32(a[8]) - int32(b[8])
-	if da < 0 {
-		sum -= da
-	} else {
-		sum += da
-	}
-	da = int32(a[9]) - int32(b[9])
-	if da < 0 {
-		sum -= da
-	} else {
-		sum += da
-	}
-	da = int32(a[10]) - int32(b[10])
-	if da < 0 {
-		sum -= da
-	} else {
-		sum += da
-	}
-	da = int32(a[11]) - int32(b[11])
-	if da < 0 {
-		sum -= da
-	} else {
-		sum += da
-	}
-	da = int32(a[12]) - int32(b[12])
-	if da < 0 {
-		sum -= da
-	} else {
-		sum += da
-	}
-	da = int32(a[13]) - int32(b[13])
-	if da < 0 {
-		sum -= da
-	} else {
-		sum += da
+	for i := 0; i < dims; i++ {
+		da := int32(a[i]) - int32(b[i])
+		if da < 0 {
+			sum -= da
+		} else {
+			sum += da
+		}
 	}
 	return sum
 }
