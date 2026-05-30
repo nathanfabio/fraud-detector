@@ -15,11 +15,18 @@ import (
 const dims = 14
 const topK = 5
 const numClusters = 1000
-const nprobe = 2
-const maxScanPerCluster = 1000
+const nprobe = 1
+const maxScanPerCluster = 2000
 const ivfMagic = 0x00415649
+const metaClusters = 32
+const metaProbe = 4
 
 type Vector [dims]int8
+
+type centroidIdx struct {
+	metaCentroids []Vector
+	members       [][]int32
+}
 
 type IVFIndex struct {
 	Vectors    []Vector
@@ -27,6 +34,7 @@ type IVFIndex struct {
 	Centroids  []Vector
 	Offsets    []int
 	NumClusters int
+	CIdx       centroidIdx
 }
 
 func quantize(v float64) int8 {
@@ -265,18 +273,64 @@ func (idx *IVFIndex) Search(query *Vector) int {
 		}{-1, 1<<31 - 1}
 	}
 
-	for c := 0; c < idx.NumClusters; c++ {
-		d := manhattanDist(*query, idx.Centroids[c])
-		j := nprobe - 1
-		for j > 0 && d < bestClusters[j-1].dist {
-			bestClusters[j] = bestClusters[j-1]
-			j--
+	// Hierarchical centroid search: find nearest meta-centroids first
+	if len(idx.CIdx.metaCentroids) > 0 {
+		var bestMeta [metaProbe]struct {
+			m    int
+			dist int32
 		}
-		if d < bestClusters[nprobe-1].dist {
-			bestClusters[j] = struct {
-				c    int
-				dist int32
-			}{c, d}
+		for i := 0; i < metaProbe; i++ {
+			bestMeta[i].m = -1
+			bestMeta[i].dist = 1<<31 - 1
+		}
+		for m := 0; m < len(idx.CIdx.metaCentroids); m++ {
+			d := manhattanDist(*query, idx.CIdx.metaCentroids[m])
+			j := metaProbe - 1
+			for j > 0 && d < bestMeta[j-1].dist {
+				bestMeta[j] = bestMeta[j-1]
+				j--
+			}
+			if d < bestMeta[metaProbe-1].dist {
+				bestMeta[j] = struct {
+					m    int
+					dist int32
+				}{m, d}
+			}
+		}
+		for mi := 0; mi < metaProbe; mi++ {
+			m := bestMeta[mi].m
+			if m < 0 {
+				continue
+			}
+			for _, c := range idx.CIdx.members[m] {
+				d := manhattanDist(*query, idx.Centroids[c])
+				j := nprobe - 1
+				for j > 0 && d < bestClusters[j-1].dist {
+					bestClusters[j] = bestClusters[j-1]
+					j--
+				}
+				if d < bestClusters[nprobe-1].dist {
+					bestClusters[j] = struct {
+						c    int
+						dist int32
+					}{int(c), d}
+				}
+			}
+		}
+	} else {
+		for c := 0; c < idx.NumClusters; c++ {
+			d := manhattanDist(*query, idx.Centroids[c])
+			j := nprobe - 1
+			for j > 0 && d < bestClusters[j-1].dist {
+				bestClusters[j] = bestClusters[j-1]
+				j--
+			}
+			if d < bestClusters[nprobe-1].dist {
+				bestClusters[j] = struct {
+					c    int
+					dist int32
+				}{c, d}
+			}
 		}
 	}
 
@@ -428,5 +482,70 @@ func loadBinary(path string) (*IVFIndex, error) {
 	}
 
 	fmt.Printf("Loaded IVF index: %d vectors, %d clusters\n", n, nc)
+	idx.buildCentroidIndex()
 	return idx, nil
+}
+
+func (idx *IVFIndex) buildCentroidIndex() {
+	nc := idx.NumClusters
+	mc := metaClusters
+	if nc < mc {
+		mc = nc
+	}
+	rng := rand.New(rand.NewSource(12345))
+
+	meta := make([]Vector, mc)
+	for i := 0; i < mc && i < nc; i++ {
+		meta[i] = idx.Centroids[i]
+	}
+	assignments := make([]int, nc)
+
+	for iter := 0; iter < 10; iter++ {
+		for i := 0; i < nc; i++ {
+			best := 0
+			bestDist := int32(1<<31 - 1)
+			for m := 0; m < mc; m++ {
+				d := manhattanDist(idx.Centroids[i], meta[m])
+				if d < bestDist {
+					bestDist = d
+					best = m
+				}
+			}
+			assignments[i] = best
+		}
+		counts := make([]int, mc)
+		acc := make([][]float64, mc)
+		for m := 0; m < mc; m++ {
+			acc[m] = make([]float64, dims)
+		}
+		for i := 0; i < nc; i++ {
+			m := assignments[i]
+			counts[m]++
+			for d := 0; d < dims; d++ {
+				acc[m][d] += float64(idx.Centroids[i][d])
+			}
+		}
+		for m := 0; m < mc; m++ {
+			if counts[m] > 0 {
+				cnt := float64(counts[m])
+				for d := 0; d < dims; d++ {
+					meta[m][d] = int8(math.Round(acc[m][d] / cnt))
+				}
+			}
+		}
+		_ = rng
+	}
+
+	members := make([][]int32, mc)
+	for m := 0; m < mc; m++ {
+		members[m] = make([]int32, 0)
+	}
+	for i := 0; i < nc; i++ {
+		m := assignments[i]
+		members[m] = append(members[m], int32(i))
+	}
+	idx.CIdx = centroidIdx{
+		metaCentroids: meta,
+		members:       members,
+	}
 }

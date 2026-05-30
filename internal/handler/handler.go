@@ -2,6 +2,7 @@ package handler
 
 import (
 	"encoding/json"
+	"io"
 	"net/http"
 	"sync/atomic"
 
@@ -43,7 +44,7 @@ func (h *FraudHandler) Ready(w http.ResponseWriter, _ *http.Request) {
 	if h.ready.Load() {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
-		w.Write([]byte(`{"ready":true,"build":"v5-s16-p2-s1000-unix"}`))
+		w.Write([]byte(`{"ready":true,"build":"v6-hierarchical"}`))
 		return
 	}
 	w.WriteHeader(http.StatusServiceUnavailable)
@@ -63,8 +64,15 @@ func (h *FraudHandler) Score(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	body, err := io.ReadAll(r.Body)
+	r.Body.Close()
+	if err != nil {
+		w.WriteHeader(http.StatusBadRequest)
+		return
+	}
+
 	var req vectorizer.Request
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	if err := json.Unmarshal(body, &req); err != nil {
 		w.WriteHeader(http.StatusBadRequest)
 		return
 	}
