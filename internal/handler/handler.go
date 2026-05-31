@@ -58,7 +58,7 @@ func (h *FraudHandler) Ready(w http.ResponseWriter, _ *http.Request) {
 	if h.ready.Load() {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
-		w.Write([]byte(`{"ready":true,"build":"v9-nogc"}`))
+		w.Write([]byte(`{"ready":true,"build":"v10-fastparse"}`))
 		return
 	}
 	w.WriteHeader(http.StatusServiceUnavailable)
@@ -89,15 +89,9 @@ func (h *FraudHandler) Score(w http.ResponseWriter, r *http.Request) {
 	}
 	body = body[:n]
 
-	var req vectorizer.Request
-	if err := json.Unmarshal(body, &req); err != nil {
-		bodyPool.Put(buf)
-		w.WriteHeader(http.StatusBadRequest)
-		return
-	}
+	vec := vectorizer.ParseAndBuild(body, h.normCfg, h.mccRisk)
 	bodyPool.Put(buf)
 
-	vec := vectorizer.Build(&req, h.normCfg, h.mccRisk)
 	var idxVec index.Vector
 	copy(idxVec[:], vec[:])
 	fraudCount := h.index.Search(&idxVec)
