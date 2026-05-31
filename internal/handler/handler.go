@@ -4,12 +4,26 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
+	"sync"
 	"sync/atomic"
 
 	"fraud-detector/internal/config"
 	"fraud-detector/internal/index"
 	"fraud-detector/internal/vectorizer"
 )
+
+var bodyPool = sync.Pool{
+	New: func() interface{} { return make([]byte, 1024) },
+}
+
+var responseTemplates = [6][]byte{
+	[]byte(`{"approved":true,"fraud_score":0}`),
+	[]byte(`{"approved":true,"fraud_score":0.2}`),
+	[]byte(`{"approved":true,"fraud_score":0.4}`),
+	[]byte(`{"approved":false,"fraud_score":0.6}`),
+	[]byte(`{"approved":false,"fraud_score":0.8}`),
+	[]byte(`{"approved":false,"fraud_score":1}`),
+}
 
 type FraudHandler struct {
 	index     *index.IVFIndex
@@ -44,7 +58,7 @@ func (h *FraudHandler) Ready(w http.ResponseWriter, _ *http.Request) {
 	if h.ready.Load() {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
-		w.Write([]byte(`{"ready":true,"build":"v8-fdpass"}`))
+		w.Write([]byte(`{"ready":true,"build":"v9-nogc"}`))
 		return
 	}
 	w.WriteHeader(http.StatusServiceUnavailable)
@@ -64,36 +78,33 @@ func (h *FraudHandler) Score(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	body, err := io.ReadAll(r.Body)
+	buf := bodyPool.Get().([]byte)
+	body := buf[:cap(buf)]
+	n, err := io.ReadAtLeast(r.Body, body, 1)
 	r.Body.Close()
-	if err != nil {
+	if err != nil && err != io.ErrUnexpectedEOF && err != io.EOF {
+		bodyPool.Put(buf)
 		w.WriteHeader(http.StatusBadRequest)
 		return
 	}
+	body = body[:n]
 
 	var req vectorizer.Request
 	if err := json.Unmarshal(body, &req); err != nil {
+		bodyPool.Put(buf)
 		w.WriteHeader(http.StatusBadRequest)
 		return
 	}
+	bodyPool.Put(buf)
 
 	vec := vectorizer.Build(&req, h.normCfg, h.mccRisk)
 	var idxVec index.Vector
 	copy(idxVec[:], vec[:])
 	fraudCount := h.index.Search(&idxVec)
 
-	score := float64(fraudCount) / 5.0
-	approved := score < 0.6
-
-	resp := struct {
-		Approved   bool    `json:"approved"`
-		FraudScore float64 `json:"fraud_score"`
-	}{approved, score}
-
-	data, _ := json.Marshal(resp)
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
-	w.Write(data)
+	w.Write(responseTemplates[fraudCount])
 }
 
 func (h *FraudHandler) Warmup() {
