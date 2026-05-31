@@ -1,6 +1,6 @@
 services:
   lb:
-    image: nathanfabio/fraud-detector4:v10
+    image: nathanfabio/fraud-detector4:v11
     command: ["./lb"]
     ports:
       - "9999:80"
@@ -15,7 +15,7 @@ services:
     cpus: "0.05"
 
   api1:
-    image: nathanfabio/fraud-detector4:v10
+    image: nathanfabio/fraud-detector4:v11
     command: ["./server"]
     hostname: api1
     environment:
@@ -29,7 +29,7 @@ services:
     cpus: "0.475"
 
   api2:
-    image: nathanfabio/fraud-detector4:v10
+    image: nathanfabio/fraud-detector4:v11
     command: ["./server"]
     hostname: api2
     environment:
