@@ -12,6 +12,7 @@ import (
 	"fraud-detector/internal/config"
 	"fraud-detector/internal/handler"
 	"fraud-detector/internal/index"
+	"fraud-detector/internal/server"
 )
 
 func main() {
@@ -49,25 +50,13 @@ func main() {
 	hostname, _ := os.Hostname()
 	sockPath := fmt.Sprintf("/run/sock/%s.sock", hostname)
 
-	var unixListener net.Listener
-	if err := os.MkdirAll("/run/sock", 0777); err == nil {
-		os.Remove(sockPath)
-		unixListener, err = net.Listen("unix", sockPath)
-		if err != nil {
-			log.Printf("Unix socket: %v", err)
-			unixListener = nil
-		} else {
-			os.Chmod(sockPath, 0666)
-			log.Printf("Unix socket: %s", sockPath)
-		}
-	}
-
-	port := "8080"
-	if envPort := os.Getenv("PORT"); envPort != "" {
-		port = envPort
-	}
-
-	if unixListener != nil {
+	os.MkdirAll("/run/sock", 0777)
+	os.Remove(sockPath)
+	fdLn, err := server.ListenFD(sockPath)
+	if err != nil {
+		log.Printf("FD listener: %v (falling back to TCP-only)", err)
+	} else {
+		log.Printf("FD listener: %s", sockPath)
 		go func() {
 			srv := &http.Server{
 				Handler:           mux,
@@ -76,8 +65,13 @@ func main() {
 				WriteTimeout:      10e9,
 				IdleTimeout:       30e9,
 			}
-			srv.Serve(unixListener)
+			srv.Serve(fdLn)
 		}()
+	}
+
+	port := "8080"
+	if envPort := os.Getenv("PORT"); envPort != "" {
+		port = envPort
 	}
 
 	go func() {

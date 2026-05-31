@@ -44,7 +44,7 @@ func (h *FraudHandler) Ready(w http.ResponseWriter, _ *http.Request) {
 	if h.ready.Load() {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
-		w.Write([]byte(`{"ready":true,"build":"v7-partitioned"}`))
+		w.Write([]byte(`{"ready":true,"build":"v8-fdpass"}`))
 		return
 	}
 	w.WriteHeader(http.StatusServiceUnavailable)
