@@ -12,11 +12,11 @@ import (
 	"fraud-detector/internal/vectorizer"
 )
 
-var bodyPool = sync.Pool{
+var BodyPool = sync.Pool{
 	New: func() interface{} { return make([]byte, 1024) },
 }
 
-var responseTemplates = [6][]byte{
+var ResponseTemplates = [6][]byte{
 	[]byte(`{"approved":true,"fraud_score":0}`),
 	[]byte(`{"approved":true,"fraud_score":0.2}`),
 	[]byte(`{"approved":true,"fraud_score":0.4}`),
@@ -54,6 +54,30 @@ func (h *FraudHandler) SetReady() {
 	h.ready.Store(true)
 }
 
+func (h *FraudHandler) IsReady() bool {
+	return h.ready.Load()
+}
+
+func (h *FraudHandler) TryAcquire() bool {
+	select {
+	case h.semaphore <- struct{}{}:
+		return true
+	default:
+		return false
+	}
+}
+
+func (h *FraudHandler) Release() {
+	<-h.semaphore
+}
+
+func (h *FraudHandler) Process(body []byte) int {
+	vec := vectorizer.ParseAndBuild(body, h.normCfg, h.mccRisk)
+	var idxVec index.Vector
+	copy(idxVec[:], vec[:])
+	return h.index.Search(&idxVec)
+}
+
 func (h *FraudHandler) Ready(w http.ResponseWriter, _ *http.Request) {
 	if h.ready.Load() {
 		w.Header().Set("Content-Type", "application/json")
@@ -78,27 +102,23 @@ func (h *FraudHandler) Score(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	buf := bodyPool.Get().([]byte)
+	buf := BodyPool.Get().([]byte)
 	body := buf[:cap(buf)]
 	n, err := io.ReadAtLeast(r.Body, body, 1)
 	r.Body.Close()
 	if err != nil && err != io.ErrUnexpectedEOF && err != io.EOF {
-		bodyPool.Put(buf)
+		BodyPool.Put(buf)
 		w.WriteHeader(http.StatusBadRequest)
 		return
 	}
 	body = body[:n]
 
-	vec := vectorizer.ParseAndBuild(body, h.normCfg, h.mccRisk)
-	bodyPool.Put(buf)
-
-	var idxVec index.Vector
-	copy(idxVec[:], vec[:])
-	fraudCount := h.index.Search(&idxVec)
+	fraudCount := h.Process(body)
+	BodyPool.Put(buf)
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
-	w.Write(responseTemplates[fraudCount])
+	w.Write(ResponseTemplates[fraudCount])
 }
 
 func (h *FraudHandler) Warmup() {

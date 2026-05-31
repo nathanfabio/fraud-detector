@@ -43,6 +43,8 @@ func main() {
 
 	h := handler.New(normCfg, mccRisk, nil)
 
+	server.InitHTTP([]byte(`{"ready":true,"build":"v11-rawhttp"}`), handler.ResponseTemplates)
+
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /ready", h.Ready)
 	mux.HandleFunc("POST /fraud-score", h.Score)
@@ -58,14 +60,13 @@ func main() {
 	} else {
 		log.Printf("FD listener: %s", sockPath)
 		go func() {
-			srv := &http.Server{
-				Handler:           mux,
-				ReadHeaderTimeout: 5e9,
-				ReadTimeout:       10e9,
-				WriteTimeout:      10e9,
-				IdleTimeout:       30e9,
+			for {
+				conn, aerr := fdLn.Accept()
+				if aerr != nil {
+					break
+				}
+				go server.HandleConn(conn, h)
 			}
-			srv.Serve(fdLn)
 		}()
 	}
 
