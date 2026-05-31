@@ -14,12 +14,14 @@ import (
 
 const dims = 14
 const topK = 5
-const numClusters = 1000
 const nprobe = 1
 const maxScanPerCluster = 2000
 const ivfMagic = 0x00415649
 const metaClusters = 32
 const metaProbe = 4
+
+const numPartitions = 16
+const clustersPerPartition = 400
 
 type Vector [dims]int8
 
@@ -28,13 +30,34 @@ type centroidIdx struct {
 	members       [][]int32
 }
 
-type IVFIndex struct {
-	Vectors    []Vector
-	Labels     []uint8
-	Centroids  []Vector
-	Offsets    []int
+type SubIndex struct {
+	Vectors     []Vector
+	Labels      []uint8
+	Centroids   []Vector
+	Offsets     []int
 	NumClusters int
-	CIdx       centroidIdx
+	CIdx        centroidIdx
+}
+
+type IVFIndex struct {
+	Parts [numPartitions]*SubIndex
+}
+
+func PartitionTag(vec Vector) int {
+	tag := 0
+	if vec[10] != 0 {
+		tag |= 8
+	}
+	if vec[9] != 0 {
+		tag |= 4
+	}
+	if vec[11] != 0 {
+		tag |= 2
+	}
+	if vec[5] != -1 {
+		tag |= 1
+	}
+	return tag
 }
 
 func quantize(v float64) int8 {
@@ -62,8 +85,24 @@ func BuildIndex(inputPath, outputPath string) error {
 	}
 	fmt.Printf("Loaded %d records for index building\n", len(records))
 
-	idx := buildIVF(records)
+	partitions := make([][]rawRecord, numPartitions)
+	for i := 0; i < numPartitions; i++ {
+		partitions[i] = make([]rawRecord, 0)
+	}
+	for _, r := range records {
+		tag := PartitionTag(r.vec)
+		partitions[tag] = append(partitions[tag], r)
+	}
 	records = nil
+
+	for tag := 0; tag < numPartitions; tag++ {
+		fmt.Printf("Partition %d: %d records\n", tag, len(partitions[tag]))
+	}
+
+	idx := &IVFIndex{}
+	for tag := 0; tag < numPartitions; tag++ {
+		idx.Parts[tag] = buildSub(partitions[tag])
+	}
 
 	if err := idx.saveBinary(outputPath); err != nil {
 		return err
@@ -128,12 +167,20 @@ func loadJSON(path string) ([]rawRecord, error) {
 	return records, nil
 }
 
-func buildIVF(records []rawRecord) *IVFIndex {
+func buildSub(records []rawRecord) *SubIndex {
 	n := len(records)
+	nc := clustersPerPartition
+	if nc > n {
+		nc = n
+	}
+	if nc < 1 {
+		return &SubIndex{}
+	}
+
 	rng := rand.New(rand.NewSource(42))
 
-	centroids := make([]Vector, numClusters)
-	kpp := numClusters
+	centroids := make([]Vector, nc)
+	kpp := nc
 	if kpp > 100 {
 		kpp = 100
 	}
@@ -171,7 +218,7 @@ func buildIVF(records []rawRecord) *IVFIndex {
 		}
 	}
 
-	for i := kpp; i < numClusters && i < n; i++ {
+	for i := kpp; i < nc && i < n; i++ {
 		centroids[i] = records[rng.Intn(n)].vec
 	}
 
@@ -185,14 +232,14 @@ func buildIVF(records []rawRecord) *IVFIndex {
 			perm[i] = rng.Intn(n)
 		}
 
-		acc := make([][dims]float64, numClusters)
-		counts := make([]int, numClusters)
+		acc := make([][dims]float64, nc)
+		counts := make([]int, nc)
 
 		for _, idx := range perm {
 			v := records[idx].vec
 			bestC := 0
 			bestDist := int32(1<<31 - 1)
-			for c := 0; c < numClusters; c++ {
+			for c := 0; c < nc; c++ {
 				d := manhattanDist(v, centroids[c])
 				if d < bestDist {
 					bestDist = d
@@ -205,7 +252,7 @@ func buildIVF(records []rawRecord) *IVFIndex {
 			}
 		}
 
-		for c := 0; c < numClusters; c++ {
+		for c := 0; c < nc; c++ {
 			if counts[c] > 0 {
 				cnt := float64(counts[c])
 				for d := 0; d < dims; d++ {
@@ -216,11 +263,11 @@ func buildIVF(records []rawRecord) *IVFIndex {
 	}
 
 	assignments := make([]int, n)
-	clusterCounts := make([]int, numClusters)
+	clusterCounts := make([]int, nc)
 	for i := 0; i < n; i++ {
 		bestC := 0
 		bestDist := int32(1<<31 - 1)
-		for c := 0; c < numClusters; c++ {
+		for c := 0; c < nc; c++ {
 			d := manhattanDist(records[i].vec, centroids[c])
 			if d < bestDist {
 				bestDist = d
@@ -231,37 +278,41 @@ func buildIVF(records []rawRecord) *IVFIndex {
 		clusterCounts[bestC]++
 	}
 
-	byCluster := make([][]int, numClusters)
-	for c := 0; c < numClusters; c++ {
+	byCluster := make([][]int, nc)
+	for c := 0; c < nc; c++ {
 		byCluster[c] = make([]int, 0, clusterCounts[c])
 	}
 	for i := 0; i < n; i++ {
 		byCluster[assignments[i]] = append(byCluster[assignments[i]], i)
 	}
 
-	idx := &IVFIndex{
+	sub := &SubIndex{
 		Vectors:     make([]Vector, n),
 		Labels:      make([]uint8, n),
 		Centroids:   centroids,
-		Offsets:     make([]int, numClusters+1),
-		NumClusters: numClusters,
+		Offsets:     make([]int, nc+1),
+		NumClusters: nc,
 	}
 
 	pos := 0
-	for c := 0; c < numClusters; c++ {
-		idx.Offsets[c] = pos
+	for c := 0; c < nc; c++ {
+		sub.Offsets[c] = pos
 		for _, origIdx := range byCluster[c] {
-			idx.Vectors[pos] = records[origIdx].vec
-			idx.Labels[pos] = records[origIdx].label
+			sub.Vectors[pos] = records[origIdx].vec
+			sub.Labels[pos] = records[origIdx].label
 			pos++
 		}
 	}
-	idx.Offsets[numClusters] = n
+	sub.Offsets[nc] = n
 
-	return idx
+	return sub
 }
 
-func (idx *IVFIndex) Search(query *Vector) int {
+func (sub *SubIndex) search(query *Vector) int {
+	if sub.NumClusters == 0 {
+		return 0
+	}
+
 	var bestClusters [nprobe]struct {
 		c    int
 		dist int32
@@ -273,8 +324,7 @@ func (idx *IVFIndex) Search(query *Vector) int {
 		}{-1, 1<<31 - 1}
 	}
 
-	// Hierarchical centroid search: find nearest meta-centroids first
-	if len(idx.CIdx.metaCentroids) > 0 {
+	if len(sub.CIdx.metaCentroids) > 0 {
 		var bestMeta [metaProbe]struct {
 			m    int
 			dist int32
@@ -283,8 +333,8 @@ func (idx *IVFIndex) Search(query *Vector) int {
 			bestMeta[i].m = -1
 			bestMeta[i].dist = 1<<31 - 1
 		}
-		for m := 0; m < len(idx.CIdx.metaCentroids); m++ {
-			d := manhattanDist(*query, idx.CIdx.metaCentroids[m])
+		for m := 0; m < len(sub.CIdx.metaCentroids); m++ {
+			d := manhattanDist(*query, sub.CIdx.metaCentroids[m])
 			j := metaProbe - 1
 			for j > 0 && d < bestMeta[j-1].dist {
 				bestMeta[j] = bestMeta[j-1]
@@ -302,8 +352,8 @@ func (idx *IVFIndex) Search(query *Vector) int {
 			if m < 0 {
 				continue
 			}
-			for _, c := range idx.CIdx.members[m] {
-				d := manhattanDist(*query, idx.Centroids[c])
+			for _, c := range sub.CIdx.members[m] {
+				d := manhattanDist(*query, sub.Centroids[c])
 				j := nprobe - 1
 				for j > 0 && d < bestClusters[j-1].dist {
 					bestClusters[j] = bestClusters[j-1]
@@ -318,8 +368,8 @@ func (idx *IVFIndex) Search(query *Vector) int {
 			}
 		}
 	} else {
-		for c := 0; c < idx.NumClusters; c++ {
-			d := manhattanDist(*query, idx.Centroids[c])
+		for c := 0; c < sub.NumClusters; c++ {
+			d := manhattanDist(*query, sub.Centroids[c])
 			j := nprobe - 1
 			for j > 0 && d < bestClusters[j-1].dist {
 				bestClusters[j] = bestClusters[j-1]
@@ -345,8 +395,8 @@ func (idx *IVFIndex) Search(query *Vector) int {
 		if c < 0 {
 			continue
 		}
-		start := idx.Offsets[c]
-		end := idx.Offsets[c+1]
+		start := sub.Offsets[c]
+		end := sub.Offsets[c+1]
 		count := end - start
 		if count > maxScanPerCluster {
 			count = maxScanPerCluster
@@ -354,7 +404,7 @@ func (idx *IVFIndex) Search(query *Vector) int {
 		}
 
 		for i := start; i < end; i++ {
-			d := manhattanDist(*query, idx.Vectors[i])
+			d := manhattanDist(*query, sub.Vectors[i])
 			if d >= bestDist[topK-1] {
 				continue
 			}
@@ -365,7 +415,7 @@ func (idx *IVFIndex) Search(query *Vector) int {
 				j--
 			}
 			bestDist[j] = d
-			bestLabels[j] = idx.Labels[i]
+			bestLabels[j] = sub.Labels[i]
 		}
 	}
 
@@ -376,6 +426,15 @@ func (idx *IVFIndex) Search(query *Vector) int {
 		}
 	}
 	return fraudCount
+}
+
+func (idx *IVFIndex) Search(query *Vector) int {
+	tag := PartitionTag(*query)
+	sub := idx.Parts[tag]
+	if sub == nil {
+		return 0
+	}
+	return sub.search(query)
 }
 
 func manhattanDist(a, b Vector) int32 {
@@ -398,36 +457,64 @@ func (idx *IVFIndex) saveBinary(path string) error {
 	}
 	defer f.Close()
 
-	b := make([]byte, 12)
+	b := make([]byte, 10)
 	binary.LittleEndian.PutUint32(b[0:4], ivfMagic)
-	binary.LittleEndian.PutUint32(b[4:8], uint32(len(idx.Vectors)))
-	binary.LittleEndian.PutUint32(b[8:12], uint32(idx.NumClusters))
+	binary.LittleEndian.PutUint16(b[4:6], numPartitions)
+	// bytes 6-10 reserved
 	if _, err := f.Write(b); err != nil {
 		return err
 	}
 
-	for _, v := range idx.Vectors {
-		raw := unsafe.Slice((*byte)(unsafe.Pointer(&v[0])), dims)
-		if _, err := f.Write(raw); err != nil {
-			return err
+	offsets := make([]uint32, numPartitions)
+	offset := uint32(10 + numPartitions*10)
+	for tag := 0; tag < numPartitions; tag++ {
+		offsets[tag] = offset
+		sub := idx.Parts[tag]
+		n := 0
+		nc := 0
+		if sub != nil {
+			n = len(sub.Vectors)
+			nc = sub.NumClusters
 		}
+		offset += uint32(n*14 + n + nc*14 + (nc+1)*4)
 	}
-	if _, err := f.Write(idx.Labels); err != nil {
-		return err
-	}
-	for _, c := range idx.Centroids {
-		raw := unsafe.Slice((*byte)(unsafe.Pointer(&c[0])), dims)
-		if _, err := f.Write(raw); err != nil {
-			return err
+
+	for tag := 0; tag < numPartitions; tag++ {
+		sub := idx.Parts[tag]
+		n := 0
+		nc := 0
+		if sub != nil {
+			n = len(sub.Vectors)
+			nc = sub.NumClusters
 		}
+		entry := make([]byte, 10)
+		binary.LittleEndian.PutUint32(entry[0:4], offsets[tag])
+		binary.LittleEndian.PutUint32(entry[4:8], uint32(n))
+		binary.LittleEndian.PutUint16(entry[8:10], uint16(nc))
+		f.Write(entry)
 	}
-	offBytes := make([]byte, (idx.NumClusters+1)*4)
-	for i, o := range idx.Offsets {
-		binary.LittleEndian.PutUint32(offBytes[i*4:(i+1)*4], uint32(o))
+
+	for tag := 0; tag < numPartitions; tag++ {
+		sub := idx.Parts[tag]
+		if sub == nil {
+			continue
+		}
+		for _, v := range sub.Vectors {
+			raw := unsafe.Slice((*byte)(unsafe.Pointer(&v[0])), dims)
+			f.Write(raw)
+		}
+		f.Write(sub.Labels)
+		for _, c := range sub.Centroids {
+			raw := unsafe.Slice((*byte)(unsafe.Pointer(&c[0])), dims)
+			f.Write(raw)
+		}
+		offBytes := make([]byte, (sub.NumClusters+1)*4)
+		for i, o := range sub.Offsets {
+			binary.LittleEndian.PutUint32(offBytes[i*4:(i+1)*4], uint32(o))
+		}
+		f.Write(offBytes)
 	}
-	if _, err := f.Write(offBytes); err != nil {
-		return err
-	}
+
 	return nil
 }
 
@@ -438,7 +525,7 @@ func loadBinary(path string) (*IVFIndex, error) {
 	}
 	defer f.Close()
 
-	header := make([]byte, 12)
+	header := make([]byte, 10)
 	if _, err := io.ReadFull(f, header); err != nil {
 		return nil, err
 	}
@@ -446,57 +533,89 @@ func loadBinary(path string) (*IVFIndex, error) {
 		return nil, fmt.Errorf("invalid magic")
 	}
 
-	n := int(binary.LittleEndian.Uint32(header[4:8]))
-	nc := int(binary.LittleEndian.Uint32(header[8:12]))
+	nParts := int(binary.LittleEndian.Uint16(header[4:6]))
 
-	idx := &IVFIndex{
-		Vectors:     make([]Vector, n),
-		Labels:      make([]uint8, n),
-		Centroids:   make([]Vector, nc),
-		Offsets:     make([]int, nc+1),
-		NumClusters: nc,
-	}
+	offsets := make([]uint32, nParts)
+	numVecs := make([]int, nParts)
+	numClus := make([]int, nParts)
 
-	for i := 0; i < n; i++ {
-		raw := unsafe.Slice((*byte)(unsafe.Pointer(&idx.Vectors[i][0])), dims)
-		if _, err := io.ReadFull(f, raw); err != nil {
+	for i := 0; i < nParts; i++ {
+		entry := make([]byte, 10)
+		if _, err := io.ReadFull(f, entry); err != nil {
 			return nil, err
 		}
+		offsets[i] = binary.LittleEndian.Uint32(entry[0:4])
+		numVecs[i] = int(binary.LittleEndian.Uint32(entry[4:8]))
+		numClus[i] = int(binary.LittleEndian.Uint16(entry[8:10]))
 	}
-	if _, err := io.ReadFull(f, idx.Labels); err != nil {
-		return nil, err
-	}
-	for i := 0; i < nc; i++ {
-		raw := unsafe.Slice((*byte)(unsafe.Pointer(&idx.Centroids[i][0])), dims)
-		if _, err := io.ReadFull(f, raw); err != nil {
+
+	idx := &IVFIndex{}
+
+	for i := 0; i < nParts; i++ {
+		if numVecs[i] == 0 {
+			continue
+		}
+		n := numVecs[i]
+		nc := numClus[i]
+
+		sub := &SubIndex{
+			Vectors:     make([]Vector, n),
+			Labels:      make([]uint8, n),
+			Centroids:   make([]Vector, nc),
+			Offsets:     make([]int, nc+1),
+			NumClusters: nc,
+		}
+
+		for vi := 0; vi < n; vi++ {
+			raw := unsafe.Slice((*byte)(unsafe.Pointer(&sub.Vectors[vi][0])), dims)
+			if _, err := io.ReadFull(f, raw); err != nil {
+				return nil, err
+			}
+		}
+		if _, err := io.ReadFull(f, sub.Labels); err != nil {
 			return nil, err
 		}
+		for ci := 0; ci < nc; ci++ {
+			raw := unsafe.Slice((*byte)(unsafe.Pointer(&sub.Centroids[ci][0])), dims)
+			if _, err := io.ReadFull(f, raw); err != nil {
+				return nil, err
+			}
+		}
+		offBytes := make([]byte, (nc+1)*4)
+		if _, err := io.ReadFull(f, offBytes); err != nil {
+			return nil, err
+		}
+		for oi := 0; oi <= nc; oi++ {
+			sub.Offsets[oi] = int(binary.LittleEndian.Uint32(offBytes[oi*4 : (oi+1)*4]))
+		}
+
+		sub.buildCentroidIndex()
+		idx.Parts[i] = sub
 	}
 
-	offBytes := make([]byte, (nc+1)*4)
-	if _, err := io.ReadFull(f, offBytes); err != nil {
-		return nil, err
+	total := 0
+	for i := 0; i < nParts; i++ {
+		total += numVecs[i]
 	}
-	for i := 0; i <= nc; i++ {
-		idx.Offsets[i] = int(binary.LittleEndian.Uint32(offBytes[i*4 : (i+1)*4]))
-	}
-
-	fmt.Printf("Loaded IVF index: %d vectors, %d clusters\n", n, nc)
-	idx.buildCentroidIndex()
+	fmt.Printf("Loaded partitioned IVF index: %d vectors across %d partitions\n", total, nParts)
 	return idx, nil
 }
 
-func (idx *IVFIndex) buildCentroidIndex() {
-	nc := idx.NumClusters
+func (sub *SubIndex) buildCentroidIndex() {
+	nc := sub.NumClusters
 	mc := metaClusters
 	if nc < mc {
 		mc = nc
 	}
+	if mc < 2 {
+		return
+	}
+
 	rng := rand.New(rand.NewSource(12345))
 
 	meta := make([]Vector, mc)
 	for i := 0; i < mc && i < nc; i++ {
-		meta[i] = idx.Centroids[i]
+		meta[i] = sub.Centroids[i]
 	}
 	assignments := make([]int, nc)
 
@@ -505,7 +624,7 @@ func (idx *IVFIndex) buildCentroidIndex() {
 			best := 0
 			bestDist := int32(1<<31 - 1)
 			for m := 0; m < mc; m++ {
-				d := manhattanDist(idx.Centroids[i], meta[m])
+				d := manhattanDist(sub.Centroids[i], meta[m])
 				if d < bestDist {
 					bestDist = d
 					best = m
@@ -522,7 +641,7 @@ func (idx *IVFIndex) buildCentroidIndex() {
 			m := assignments[i]
 			counts[m]++
 			for d := 0; d < dims; d++ {
-				acc[m][d] += float64(idx.Centroids[i][d])
+				acc[m][d] += float64(sub.Centroids[i][d])
 			}
 		}
 		for m := 0; m < mc; m++ {
@@ -544,7 +663,7 @@ func (idx *IVFIndex) buildCentroidIndex() {
 		m := assignments[i]
 		members[m] = append(members[m], int32(i))
 	}
-	idx.CIdx = centroidIdx{
+	sub.CIdx = centroidIdx{
 		metaCentroids: meta,
 		members:       members,
 	}

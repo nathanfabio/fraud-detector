@@ -90,7 +90,13 @@ func main() {
 		if err != nil {
 			log.Fatalf("Failed to load index: %v", err)
 		}
-		log.Printf("Index loaded: %d vectors, %d clusters", len(idx.Vectors), idx.NumClusters)
+		totalVecs := 0
+		for _, p := range idx.Parts {
+			if p != nil {
+				totalVecs += len(p.Vectors)
+			}
+		}
+		log.Printf("Index loaded: %d vectors across %d partitions", totalVecs, len(idx.Parts))
 		h.SetIndex(idx)
 		h.Warmup()
 		log.Println("Warmup complete")

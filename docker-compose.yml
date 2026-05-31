@@ -15,7 +15,7 @@ services:
     cpus: "0.2"
 
   api1:
-    image: nathanfabio/fraud-detector4:v6
+    image: nathanfabio/fraud-detector4:v7
     hostname: api1
     environment:
       - PORT=8080
@@ -28,7 +28,7 @@ services:
     cpus: "0.4"
 
   api2:
-    image: nathanfabio/fraud-detector4:v6
+    image: nathanfabio/fraud-detector4:v7
     hostname: api2
     environment:
       - PORT=8080
