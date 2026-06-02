@@ -7,8 +7,6 @@ import (
 	"net"
 	"net/http"
 	"os"
-	"runtime/debug"
-
 	"fraud-detector/internal/config"
 	"fraud-detector/internal/handler"
 	"fraud-detector/internal/index"
@@ -28,9 +26,6 @@ func main() {
 		log.Println("Index built successfully")
 		return
 	}
-
-	debug.SetGCPercent(25)
-	debug.SetMemoryLimit(155 * 1024 * 1024)
 
 	normCfg, err := config.LoadNormalization("resources/normalization.json")
 	if err != nil {

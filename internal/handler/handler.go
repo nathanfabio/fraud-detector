@@ -12,7 +12,7 @@ import (
 	"fraud-detector/internal/vectorizer"
 )
 
-var BodyPool = sync.Pool{
+var bodyPool = sync.Pool{
 	New: func() interface{} { return make([]byte, 4096) },
 }
 
@@ -26,19 +26,17 @@ var ResponseTemplates = [6][]byte{
 }
 
 type FraudHandler struct {
-	index     *index.IVFIndex
-	normCfg   *config.Normalization
-	mccRisk   map[string]float64
-	ready     atomic.Bool
-	semaphore chan struct{}
+	index   *index.IVFIndex
+	normCfg *config.Normalization
+	mccRisk map[string]float64
+	ready   atomic.Bool
 }
 
 func New(cfg *config.Normalization, mccRisk map[string]float64, idx *index.IVFIndex) *FraudHandler {
 	h := &FraudHandler{
-		normCfg:   cfg,
-		mccRisk:   mccRisk,
-		index:     idx,
-		semaphore: make(chan struct{}, 128),
+		normCfg: cfg,
+		mccRisk: mccRisk,
+		index:   idx,
 	}
 	if idx != nil {
 		h.ready.Store(true)
@@ -58,19 +56,6 @@ func (h *FraudHandler) IsReady() bool {
 	return h.ready.Load()
 }
 
-func (h *FraudHandler) TryAcquire() bool {
-	select {
-	case h.semaphore <- struct{}{}:
-		return true
-	default:
-		return false
-	}
-}
-
-func (h *FraudHandler) Release() {
-	<-h.semaphore
-}
-
 func (h *FraudHandler) Process(body []byte) int {
 	vec := vectorizer.ParseAndBuild(body, h.normCfg, h.mccRisk)
 	var idxVec index.Vector
@@ -82,7 +67,7 @@ func (h *FraudHandler) Ready(w http.ResponseWriter, _ *http.Request) {
 	if h.ready.Load() {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
-		w.Write([]byte(`{"ready":true,"build":"v10-fastparse"}`))
+		w.Write([]byte(`{"ready":true,"build":"v12-opt"}`))
 		return
 	}
 	w.WriteHeader(http.StatusServiceUnavailable)
@@ -94,27 +79,19 @@ func (h *FraudHandler) Score(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	select {
-	case h.semaphore <- struct{}{}:
-		defer func() { <-h.semaphore }()
-	default:
-		w.WriteHeader(http.StatusServiceUnavailable)
-		return
-	}
-
-	buf := BodyPool.Get().([]byte)
-	body := buf[:cap(buf)]
-	n, err := io.ReadFull(r.Body, body)
+	buf := bodyPool.Get().([]byte)
+	cbuf := buf[:cap(buf)]
+	n, err := io.ReadFull(r.Body, cbuf)
 	r.Body.Close()
-	if err != nil && err != io.ErrUnexpectedEOF && err != io.EOF {
-		BodyPool.Put(buf)
+	if n == 0 || (err != nil && err != io.ErrUnexpectedEOF && err != io.EOF) {
+		bodyPool.Put(buf)
 		w.WriteHeader(http.StatusBadRequest)
 		return
 	}
-	body = body[:n]
+	body := cbuf[:n]
 
 	fraudCount := h.Process(body)
-	BodyPool.Put(buf)
+	bodyPool.Put(buf)
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
@@ -132,7 +109,9 @@ func (h *FraudHandler) Warmup() {
 	var req vectorizer.Request
 	for round := 0; round < 16; round++ {
 		for _, p := range payloads {
-			json.Unmarshal([]byte(p), &req)
+			if err := json.Unmarshal([]byte(p), &req); err != nil {
+				continue
+			}
 			vec := vectorizer.Build(&req, h.normCfg, h.mccRisk)
 			var v index.Vector
 			copy(v[:], vec[:])

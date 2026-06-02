@@ -6,6 +6,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"sync"
 
 	"fraud-detector/internal/handler"
 )
@@ -14,6 +15,10 @@ var httpResponses [6][]byte
 var readyHTTP []byte
 var badRequestHTTP = []byte("HTTP/1.1 400 Bad Request\r\nContent-Length: 0\r\n\r\n")
 var serviceUnavailableHTTP = []byte("HTTP/1.1 503 Service Unavailable\r\nContent-Length: 0\r\n\r\n")
+
+var connBodyPool = sync.Pool{
+	New: func() interface{} { return make([]byte, 4096) },
+}
 
 func InitHTTP(readyJSON []byte, templates [6][]byte) {
 	for i, body := range templates {
@@ -50,19 +55,21 @@ func HandleConn(conn net.Conn, h *handler.FraudHandler) {
 			conn.Write(serviceUnavailableHTTP)
 			return
 		}
-		if !h.TryAcquire() {
-			conn.Write(serviceUnavailableHTTP)
-			return
-		}
-		body, err := io.ReadAll(io.LimitReader(req.Body, 4096))
+		buf := connBodyPool.Get().([]byte)
+		n, err := io.ReadFull(req.Body, buf[:cap(buf)])
 		req.Body.Close()
-		if err != nil || len(body) == 0 {
-			h.Release()
+		if err != nil && err != io.ErrUnexpectedEOF && err != io.EOF {
+			connBodyPool.Put(buf)
 			conn.Write(badRequestHTTP)
 			return
 		}
-		fraudCount := h.Process(body)
-		h.Release()
+		if n == 0 {
+			connBodyPool.Put(buf)
+			conn.Write(badRequestHTTP)
+			return
+		}
+		fraudCount := h.Process(buf[:n])
+		connBodyPool.Put(buf)
 		conn.Write(httpResponses[fraudCount])
 
 	default:

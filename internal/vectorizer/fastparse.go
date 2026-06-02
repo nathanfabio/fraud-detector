@@ -2,10 +2,31 @@ package vectorizer
 
 import (
 	"bytes"
-	"fraud-detector/internal/config"
 	"math"
-	"strconv"
 	"time"
+
+	"fraud-detector/internal/config"
+)
+
+var (
+	keyAmount          = []byte("amount")
+	keyInstallments    = []byte("installments")
+	keyRequestedAt     = []byte("requested_at")
+	keyAvgAmount       = []byte("avg_amount")
+	keyTxCount24h      = []byte("tx_count_24h")
+	keyKnownMerchants  = []byte("known_merchants")
+	keyMCC             = []byte("mcc")
+	keyIsOnline        = []byte("is_online")
+	keyCardPresent     = []byte("card_present")
+	keyKmFromHome      = []byte("km_from_home")
+	keyKmFromCurrent   = []byte("km_from_current")
+	keyLastTransaction = []byte("last_transaction")
+	keyTimestamp       = []byte("timestamp")
+	keyID              = []byte("id")
+	keyTransaction     = []byte("transaction")
+	keyCustomer        = []byte("customer")
+	keyTerminal        = []byte("terminal")
+	keyMerchant        = []byte("merchant")
 )
 
 func ParseAndBuild(body []byte, cfg *config.Normalization, mccRisk map[string]float64) Vec14 {
@@ -14,8 +35,9 @@ func ParseAndBuild(body []byte, cfg *config.Normalization, mccRisk map[string]fl
 	var kmFromHome, kmFromCurrent float64
 	var isOnline, cardPresent, unknownMerchant bool
 	var requestedAtStr, lastTxAtStr string
-	var merchantID, mcc string
-	var knownMerchants []string
+	var mcc string
+	var merchantIDBytes []byte
+	var knownMerchantsRaw []byte
 	hasLastTx := false
 	inMerchant := false
 
@@ -25,12 +47,12 @@ func ParseAndBuild(body []byte, cfg *config.Normalization, mccRisk map[string]fl
 	for pos < n {
 		c := body[pos]
 		if c == '"' {
-			end := bytes.IndexByte(body[pos+1:], '"')
-			if end < 0 {
+			keyEnd := bytes.IndexByte(body[pos+1:], '"')
+			if keyEnd < 0 {
 				break
 			}
-			key := body[pos+1 : pos+1+end]
-			pos += end + 2
+			key := body[pos+1 : pos+1+keyEnd]
+			pos += keyEnd + 2
 			for pos < n && body[pos] != ':' {
 				pos++
 			}
@@ -39,59 +61,63 @@ func ParseAndBuild(body []byte, cfg *config.Normalization, mccRisk map[string]fl
 				pos++
 			}
 
-			switch string(key) {
-			case "id":
+			switch {
+			case bytes.Equal(key, keyID):
 				if pos < n && body[pos] == '"' && inMerchant {
-					merchantID, pos = extractString(body, pos)
+					merchantIDBytes, pos = extractBytes(body, pos)
 				} else {
 					pos = skipRawValue(body, pos)
 				}
-			case "amount":
+			case bytes.Equal(key, keyAmount):
 				if txAmount == 0 {
-					txAmount, pos = extractFloat(body, pos)
+					txAmount, pos = fastParseFloat(body, pos)
 				} else {
 					pos = skipRawValue(body, pos)
 				}
-			case "installments":
-				txInstallments, pos = extractFloat(body, pos)
-			case "requested_at":
+			case bytes.Equal(key, keyInstallments):
+				txInstallments, pos = fastParseFloat(body, pos)
+			case bytes.Equal(key, keyRequestedAt):
 				requestedAtStr, pos = extractString(body, pos)
-			case "avg_amount":
+			case bytes.Equal(key, keyAvgAmount):
 				if custAvgAmount == 0 {
-					custAvgAmount, pos = extractFloat(body, pos)
+					custAvgAmount, pos = fastParseFloat(body, pos)
 				} else {
-					merchantAvgAmount, pos = extractFloat(body, pos)
+					merchantAvgAmount, pos = fastParseFloat(body, pos)
 				}
-			case "tx_count_24h":
-				txCount24h, pos = extractFloat(body, pos)
-			case "known_merchants":
-				knownMerchants, pos = extractStringArray(body, pos)
-			case "mcc":
+			case bytes.Equal(key, keyTxCount24h):
+				txCount24h, pos = fastParseFloat(body, pos)
+			case bytes.Equal(key, keyKnownMerchants):
+				knownMerchantsRaw, pos = extractRawArray(body, pos)
+			case bytes.Equal(key, keyMCC):
 				mcc, pos = extractString(body, pos)
-			case "is_online":
+			case bytes.Equal(key, keyIsOnline):
 				isOnline, pos = extractBool(body, pos)
-			case "card_present":
+			case bytes.Equal(key, keyCardPresent):
 				cardPresent, pos = extractBool(body, pos)
-			case "km_from_home":
-				kmFromHome, pos = extractFloat(body, pos)
-			case "km_from_current":
-				kmFromCurrent, pos = extractFloat(body, pos)
-			case "last_transaction":
+			case bytes.Equal(key, keyKmFromHome):
+				kmFromHome, pos = fastParseFloat(body, pos)
+			case bytes.Equal(key, keyKmFromCurrent):
+				kmFromCurrent, pos = fastParseFloat(body, pos)
+			case bytes.Equal(key, keyLastTransaction):
 				if pos < n && body[pos] == 'n' {
 					pos += 4
 				} else {
 					hasLastTx = true
 					pos++
 				}
-			case "timestamp":
+			case bytes.Equal(key, keyTimestamp):
 				if hasLastTx && lastTxAtStr == "" {
 					lastTxAtStr, pos = extractString(body, pos)
+				} else {
+					pos = skipRawValue(body, pos)
 				}
-			case "transaction", "customer", "terminal":
+			case bytes.Equal(key, keyTransaction),
+				bytes.Equal(key, keyCustomer),
+				bytes.Equal(key, keyTerminal):
 				if pos < n && body[pos] == '{' {
 					pos++
 				}
-			case "merchant":
+			case bytes.Equal(key, keyMerchant):
 				if pos < n && body[pos] == '{' {
 					inMerchant = true
 					pos++
@@ -107,15 +133,7 @@ func ParseAndBuild(body []byte, cfg *config.Normalization, mccRisk map[string]fl
 		}
 	}
 
-	checkMerchant := func(id string, list []string) bool {
-		for _, m := range list {
-			if m == id {
-				return false
-			}
-		}
-		return true
-	}
-	unknownMerchant = checkMerchant(merchantID, knownMerchants)
+	unknownMerchant = !merchantInKnown(merchantIDBytes, knownMerchantsRaw)
 
 	return buildVector(txAmount, txInstallments, custAvgAmount, txCount24h,
 		merchantAvgAmount, kmFromHome, kmFromCurrent,
@@ -124,65 +142,115 @@ func ParseAndBuild(body []byte, cfg *config.Normalization, mccRisk map[string]fl
 		mcc, cfg, mccRisk)
 }
 
-func extractString(data []byte, pos int) (string, int) {
+func extractBytes(data []byte, pos int) ([]byte, int) {
 	if pos >= len(data) || data[pos] != '"' {
-		return "", pos
+		return nil, pos
 	}
 	end := bytes.IndexByte(data[pos+1:], '"')
 	if end < 0 {
-		return "", pos
+		return nil, pos
 	}
-	return string(data[pos+1 : pos+1+end]), pos + end + 2
+	return data[pos+1 : pos+1+end], pos + end + 2
 }
 
-func extractFloat(data []byte, pos int) (float64, int) {
+func extractString(data []byte, pos int) (string, int) {
+	b, npos := extractBytes(data, pos)
+	if b == nil {
+		return "", pos
+	}
+	return string(b), npos
+}
+
+func fastParseFloat(data []byte, pos int) (float64, int) {
 	start := pos
-	for pos < len(data) && (data[pos] >= '0' && data[pos] <= '9' || data[pos] == '-' || data[pos] == '.' || data[pos] == 'e' || data[pos] == 'E' || data[pos] == '+') {
+	negative := false
+	decimal := false
+	decDiv := float64(1)
+
+	if pos < len(data) && data[pos] == '-' {
+		negative = true
 		pos++
 	}
-	if pos == start {
-		return 0, pos
+
+	var result float64
+	for pos < len(data) {
+		c := data[pos]
+		if c >= '0' && c <= '9' {
+			result = result*10 + float64(c-'0')
+			if decimal {
+				decDiv *= 10
+			}
+			pos++
+		} else if c == '.' {
+			decimal = true
+			pos++
+		} else {
+			break
+		}
 	}
-	val, _ := strconv.ParseFloat(string(data[start:pos]), 64)
-	return val, pos
+
+	if pos == start || (negative && pos == start+1) {
+		return 0, start
+	}
+
+	if negative {
+		result = -result
+	}
+	if decimal {
+		result /= decDiv
+	}
+	return result, pos
 }
 
 func extractBool(data []byte, pos int) (bool, int) {
-	if pos+4 <= len(data) && string(data[pos:pos+4]) == "true" {
+	if pos+4 <= len(data) && data[pos] == 't' && data[pos+1] == 'r' && data[pos+2] == 'u' && data[pos+3] == 'e' {
 		return true, pos + 4
 	}
-	if pos+5 <= len(data) && string(data[pos:pos+5]) == "false" {
+	if pos+5 <= len(data) && data[pos] == 'f' {
 		return false, pos + 5
 	}
 	return false, pos
 }
 
-func extractStringArray(data []byte, pos int) ([]string, int) {
+func extractRawArray(data []byte, pos int) ([]byte, int) {
 	if pos >= len(data) || data[pos] != '[' {
 		return nil, pos
 	}
-	pos++
-	var result []string
-	for pos < len(data) {
-		for pos < len(data) && (data[pos] == ' ' || data[pos] == '\t' || data[pos] == '\n' || data[pos] == ',') {
+	start := pos + 1
+	end := bytes.IndexByte(data[start:], ']')
+	if end < 0 {
+		return nil, pos
+	}
+	return data[start : start+end], start + end + 1
+}
+
+func merchantInKnown(merchantID, knownRaw []byte) bool {
+	if len(merchantID) == 0 || len(knownRaw) == 0 {
+		return false
+	}
+	pos := 0
+	for pos < len(knownRaw) {
+		for pos < len(knownRaw) && (knownRaw[pos] == ' ' || knownRaw[pos] == '\t' || knownRaw[pos] == '\n' || knownRaw[pos] == ',') {
 			pos++
 		}
-		if pos >= len(data) {
+		if pos >= len(knownRaw) {
 			break
 		}
-		if data[pos] == ']' {
+		if knownRaw[pos] == '"' {
 			pos++
-			break
-		}
-		if data[pos] == '"' {
-			var s string
-			s, pos = extractString(data, pos)
-			result = append(result, s)
+			sid := pos
+			for pos < len(knownRaw) && knownRaw[pos] != '"' {
+				pos++
+			}
+			if pos-sid == len(merchantID) && bytes.Equal(knownRaw[sid:pos], merchantID) {
+				return true
+			}
+			pos++
 		} else {
 			pos++
 		}
 	}
-	return result, pos
+	return false
 }
 
 func skipRawValue(data []byte, pos int) int {
@@ -202,8 +270,11 @@ func skipRawValue(data []byte, pos int) int {
 			} else if data[pos] == '}' {
 				depth--
 			} else if data[pos] == '"' {
-				_, pos = extractString(data, pos)
-				continue
+				end := bytes.IndexByte(data[pos+1:], '"')
+				if end >= 0 {
+					pos += end + 2
+					continue
+				}
 			}
 			pos++
 		}
@@ -216,8 +287,11 @@ func skipRawValue(data []byte, pos int) int {
 			} else if data[pos] == ']' {
 				depth--
 			} else if data[pos] == '"' {
-				_, pos = extractString(data, pos)
-				continue
+				end := bytes.IndexByte(data[pos+1:], '"')
+				if end >= 0 {
+					pos += end + 2
+					continue
+				}
 			}
 			pos++
 		}
