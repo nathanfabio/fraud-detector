@@ -17,6 +17,7 @@ func ParseAndBuild(body []byte, cfg *config.Normalization, mccRisk map[string]fl
 	var merchantID, mcc string
 	var knownMerchants []string
 	hasLastTx := false
+	inMerchant := false
 
 	pos := 0
 	n := len(body)
@@ -40,8 +41,10 @@ func ParseAndBuild(body []byte, cfg *config.Normalization, mccRisk map[string]fl
 
 			switch string(key) {
 			case "id":
-				if pos < n && body[pos] == '"' {
+				if pos < n && body[pos] == '"' && inMerchant {
 					merchantID, pos = extractString(body, pos)
+				} else {
+					pos = skipRawValue(body, pos)
 				}
 			case "amount":
 				if txAmount == 0 {
@@ -84,13 +87,21 @@ func ParseAndBuild(body []byte, cfg *config.Normalization, mccRisk map[string]fl
 				if hasLastTx && lastTxAtStr == "" {
 					lastTxAtStr, pos = extractString(body, pos)
 				}
-			case "transaction", "customer", "merchant", "terminal":
+			case "transaction", "customer", "terminal":
 				if pos < n && body[pos] == '{' {
+					pos++
+				}
+			case "merchant":
+				if pos < n && body[pos] == '{' {
+					inMerchant = true
 					pos++
 				}
 			default:
 				pos = skipRawValue(body, pos)
 			}
+		} else if c == '}' {
+			inMerchant = false
+			pos++
 		} else {
 			pos++
 		}
@@ -239,9 +250,14 @@ func buildVector(
 ) Vec14 {
 	var vec Vec14
 
-	requestedAt, err := time.Parse(time.RFC3339, requestedAtStr)
-	if err != nil {
-		requestedAt = time.Now().UTC()
+	reqHour, reqDow, reqMinOfYear, valid := fastParseTimestamp(requestedAtStr)
+	if !valid {
+		requestedAt, err := time.Parse(time.RFC3339, requestedAtStr)
+		if err != nil {
+			requestedAt = time.Now().UTC()
+		}
+		reqHour = requestedAt.Hour()
+		reqDow = (int(requestedAt.Weekday()) + 6) % 7
 	}
 
 	vec[0] = quantize(txAmount / cfg.MaxAmount)
@@ -253,19 +269,26 @@ func buildVector(
 		vec[2] = quantize(txAmount / cfg.AmountVsAvgRatio)
 	}
 
-	vec[3] = int8(math.Round(float64(requestedAt.Hour()) / 23.0 * 127.0))
-
-	dow := requestedAt.Weekday()
-	dayOfWeek := (int(dow) + 6) % 7
-	vec[4] = int8(math.Round(float64(dayOfWeek) / 6.0 * 127.0))
+	vec[3] = int8(math.Round(float64(reqHour) / 23.0 * 127.0))
+	vec[4] = int8(math.Round(float64(reqDow) / 6.0 * 127.0))
 
 	if hasLastTx && lastTxAtStr != "" {
-		lastTs, err := time.Parse(time.RFC3339, lastTxAtStr)
-		if err == nil {
-			minutes := requestedAt.Sub(lastTs).Minutes()
+		_, _, lastMinOfYear, valid2 := fastParseTimestamp(lastTxAtStr)
+		if valid && valid2 {
+			minutes := float64(reqMinOfYear - lastMinOfYear)
+			if minutes < 0 {
+				minutes = 0
+			}
 			vec[5] = quantize(minutes / cfg.MaxMinutes)
 		} else {
-			vec[5] = -1
+			lastTs, err := time.Parse(time.RFC3339, lastTxAtStr)
+			if err == nil {
+				requestedAt, _ := time.Parse(time.RFC3339, requestedAtStr)
+				minutes := requestedAt.Sub(lastTs).Minutes()
+				vec[5] = quantize(minutes / cfg.MaxMinutes)
+			} else {
+				vec[5] = -1
+			}
 		}
 		vec[6] = quantize(kmFromCurrent / cfg.MaxKm)
 	} else {
@@ -295,4 +318,23 @@ func buildVector(
 	vec[13] = quantize(merchantAvgAmount / cfg.MaxMerchantAvgAmount)
 
 	return vec
+}
+
+var monthDays = []int{0, 31, 59, 90, 120, 151, 181, 212, 243, 273, 304, 334}
+
+func fastParseTimestamp(s string) (hour, dow, minOfYear int, ok bool) {
+	if len(s) < 17 {
+		return 0, 0, 0, false
+	}
+	month := int(s[5]-'0')*10 + int(s[6]-'0')
+	day := int(s[8]-'0')*10 + int(s[9]-'0')
+	hour = int(s[11]-'0')*10 + int(s[12]-'0')
+	minute := int(s[14]-'0')*10 + int(s[15]-'0')
+	if month < 1 || month > 12 {
+		return 0, 0, 0, false
+	}
+	dayOfYear := monthDays[month-1] + day
+	dow = (dayOfYear + 2) % 7
+	minOfYear = (dayOfYear-1)*1440 + hour*60 + minute
+	return hour, dow, minOfYear, true
 }

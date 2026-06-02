@@ -14,7 +14,7 @@ import (
 
 const dims = 14
 const topK = 5
-const nprobe = 1
+const nprobe = 2
 const maxScanPerCluster = 2000
 const ivfMagic = 0x00415649
 const metaClusters = 32
@@ -438,16 +438,63 @@ func (idx *IVFIndex) Search(query *Vector) int {
 }
 
 func manhattanDist(a, b Vector) int32 {
-	var sum int32
-	for i := 0; i < dims; i++ {
-		da := int32(a[i]) - int32(b[i])
-		if da < 0 {
-			sum -= da
-		} else {
-			sum += da
-		}
+	d0 := int32(a[0]) - int32(b[0])
+	d1 := int32(a[1]) - int32(b[1])
+	d2 := int32(a[2]) - int32(b[2])
+	d3 := int32(a[3]) - int32(b[3])
+	d4 := int32(a[4]) - int32(b[4])
+	d5 := int32(a[5]) - int32(b[5])
+	d6 := int32(a[6]) - int32(b[6])
+	d7 := int32(a[7]) - int32(b[7])
+	d8 := int32(a[8]) - int32(b[8])
+	d9 := int32(a[9]) - int32(b[9])
+	da := int32(a[10]) - int32(b[10])
+	db := int32(a[11]) - int32(b[11])
+	dc := int32(a[12]) - int32(b[12])
+	dd := int32(a[13]) - int32(b[13])
+	if d0 < 0 {
+		d0 = -d0
 	}
-	return sum
+	if d1 < 0 {
+		d1 = -d1
+	}
+	if d2 < 0 {
+		d2 = -d2
+	}
+	if d3 < 0 {
+		d3 = -d3
+	}
+	if d4 < 0 {
+		d4 = -d4
+	}
+	if d5 < 0 {
+		d5 = -d5
+	}
+	if d6 < 0 {
+		d6 = -d6
+	}
+	if d7 < 0 {
+		d7 = -d7
+	}
+	if d8 < 0 {
+		d8 = -d8
+	}
+	if d9 < 0 {
+		d9 = -d9
+	}
+	if da < 0 {
+		da = -da
+	}
+	if db < 0 {
+		db = -db
+	}
+	if dc < 0 {
+		dc = -dc
+	}
+	if dd < 0 {
+		dd = -dd
+	}
+	return d0 + d1 + d2 + d3 + d4 + d5 + d6 + d7 + d8 + d9 + da + db + dc + dd
 }
 
 func (idx *IVFIndex) saveBinary(path string) error {

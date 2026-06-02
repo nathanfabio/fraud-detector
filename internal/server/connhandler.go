@@ -54,7 +54,7 @@ func HandleConn(conn net.Conn, h *handler.FraudHandler) {
 			conn.Write(serviceUnavailableHTTP)
 			return
 		}
-		body, err := io.ReadAll(io.LimitReader(req.Body, 2048))
+		body, err := io.ReadAll(io.LimitReader(req.Body, 4096))
 		req.Body.Close()
 		if err != nil || len(body) == 0 {
 			h.Release()

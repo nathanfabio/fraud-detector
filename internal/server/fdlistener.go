@@ -33,9 +33,9 @@ func (l *fdListener) Accept() (net.Conn, error) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 
-	buf := make([]byte, 1)
+	var buf [1]byte
 	oob := make([]byte, syscall.CmsgSpace(4))
-	_, oobn, _, _, err := l.conn.ReadMsgUnix(buf, oob)
+	_, oobn, _, _, err := l.conn.ReadMsgUnix(buf[:], oob)
 	if err != nil {
 		return nil, err
 	}

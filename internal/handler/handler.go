@@ -13,7 +13,7 @@ import (
 )
 
 var BodyPool = sync.Pool{
-	New: func() interface{} { return make([]byte, 1024) },
+	New: func() interface{} { return make([]byte, 4096) },
 }
 
 var ResponseTemplates = [6][]byte{
@@ -38,7 +38,7 @@ func New(cfg *config.Normalization, mccRisk map[string]float64, idx *index.IVFIn
 		normCfg:   cfg,
 		mccRisk:   mccRisk,
 		index:     idx,
-		semaphore: make(chan struct{}, 16),
+		semaphore: make(chan struct{}, 128),
 	}
 	if idx != nil {
 		h.ready.Store(true)
@@ -104,7 +104,7 @@ func (h *FraudHandler) Score(w http.ResponseWriter, r *http.Request) {
 
 	buf := BodyPool.Get().([]byte)
 	body := buf[:cap(buf)]
-	n, err := io.ReadAtLeast(r.Body, body, 1)
+	n, err := io.ReadFull(r.Body, body)
 	r.Body.Close()
 	if err != nil && err != io.ErrUnexpectedEOF && err != io.EOF {
 		BodyPool.Put(buf)

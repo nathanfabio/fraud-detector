@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"log"
 	"net"
+	"os"
 	"syscall"
 )
 
@@ -53,11 +54,12 @@ func main() {
 		targetFd := apiFds[idx]
 		idx = (idx + 1) % len(apiFds)
 
-		rights := syscall.UnixRights(clientFd)
-		err = syscall.Sendmsg(targetFd, []byte{0}, rights, nil, 0)
-		if err != nil {
-			log.Printf("Sendmsg failed: %v", err)
-		}
-		clientFile.Close()
+		go func(tfd, cfd int, cf *os.File) {
+			defer cf.Close()
+			rights := syscall.UnixRights(cfd)
+			if err := syscall.Sendmsg(tfd, []byte{0}, rights, nil, 0); err != nil {
+				log.Printf("Sendmsg failed: %v", err)
+			}
+		}(targetFd, clientFd, clientFile)
 	}
 }

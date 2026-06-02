@@ -29,7 +29,7 @@ func main() {
 		return
 	}
 
-	debug.SetGCPercent(-1)
+	debug.SetGCPercent(25)
 	debug.SetMemoryLimit(155 * 1024 * 1024)
 
 	normCfg, err := config.LoadNormalization("resources/normalization.json")
