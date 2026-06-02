@@ -57,7 +57,7 @@ func (h *FraudHandler) IsReady() bool {
 }
 
 func (h *FraudHandler) Process(body []byte) int {
-	vec := vectorizer.ParseAndBuild(body, h.normCfg, h.mccRisk)
+	vec := vectorizer.ParseAndBuild(body, h.normCfg)
 	var idxVec index.Vector
 	copy(idxVec[:], vec[:])
 	return h.index.Search(&idxVec)

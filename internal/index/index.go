@@ -16,7 +16,7 @@ const dims = 14
 const topK = 5
 const nprobe = 2
 const maxScanPerCluster = 2000
-const ivfMagic = 0x00415649
+const ivfMagic = 0x01415649
 const metaClusters = 32
 const metaProbe = 4
 
@@ -204,7 +204,7 @@ func buildSub(records []rawRecord) *SubIndex {
 			for j := 0; j < sampleSize && j < n; j++ {
 				minDist := int64(1<<63 - 1)
 				for k := 0; k < i; k++ {
-					d := int64(manhattanDist(records[j].vec, centroids[k]))
+					d := int64(euclideanDistSq(records[j].vec, centroids[k]))
 					if d < minDist {
 						minDist = d
 					}
@@ -240,7 +240,7 @@ func buildSub(records []rawRecord) *SubIndex {
 			bestC := 0
 			bestDist := int32(1<<31 - 1)
 			for c := 0; c < nc; c++ {
-				d := manhattanDist(v, centroids[c])
+				d := euclideanDistSq(v, centroids[c])
 				if d < bestDist {
 					bestDist = d
 					bestC = c
@@ -268,7 +268,7 @@ func buildSub(records []rawRecord) *SubIndex {
 		bestC := 0
 		bestDist := int32(1<<31 - 1)
 		for c := 0; c < nc; c++ {
-			d := manhattanDist(records[i].vec, centroids[c])
+			d := euclideanDistSq(records[i].vec, centroids[c])
 			if d < bestDist {
 				bestDist = d
 				bestC = c
@@ -334,7 +334,7 @@ func (sub *SubIndex) search(query *Vector) int {
 			bestMeta[i].dist = 1<<31 - 1
 		}
 		for m := 0; m < len(sub.CIdx.metaCentroids); m++ {
-			d := manhattanDist(*query, sub.CIdx.metaCentroids[m])
+			d := euclideanDistSq(*query, sub.CIdx.metaCentroids[m])
 			j := metaProbe - 1
 			for j > 0 && d < bestMeta[j-1].dist {
 				bestMeta[j] = bestMeta[j-1]
@@ -353,7 +353,7 @@ func (sub *SubIndex) search(query *Vector) int {
 				continue
 			}
 			for _, c := range sub.CIdx.members[m] {
-				d := manhattanDist(*query, sub.Centroids[c])
+				d := euclideanDistSq(*query, sub.Centroids[c])
 				j := nprobe - 1
 				for j > 0 && d < bestClusters[j-1].dist {
 					bestClusters[j] = bestClusters[j-1]
@@ -369,7 +369,7 @@ func (sub *SubIndex) search(query *Vector) int {
 		}
 	} else {
 		for c := 0; c < sub.NumClusters; c++ {
-			d := manhattanDist(*query, sub.Centroids[c])
+			d := euclideanDistSq(*query, sub.Centroids[c])
 			j := nprobe - 1
 			for j > 0 && d < bestClusters[j-1].dist {
 				bestClusters[j] = bestClusters[j-1]
@@ -404,7 +404,7 @@ func (sub *SubIndex) search(query *Vector) int {
 		}
 
 		for i := start; i < end; i++ {
-			d := manhattanDist(*query, sub.Vectors[i])
+			d := euclideanDistSq(*query, sub.Vectors[i])
 			if d >= bestDist[topK-1] {
 				continue
 			}
@@ -437,7 +437,7 @@ func (idx *IVFIndex) Search(query *Vector) int {
 	return sub.search(query)
 }
 
-func manhattanDist(a, b Vector) int32 {
+func euclideanDistSq(a, b Vector) int32 {
 	d0 := int32(a[0]) - int32(b[0])
 	d1 := int32(a[1]) - int32(b[1])
 	d2 := int32(a[2]) - int32(b[2])
@@ -452,49 +452,7 @@ func manhattanDist(a, b Vector) int32 {
 	db := int32(a[11]) - int32(b[11])
 	dc := int32(a[12]) - int32(b[12])
 	dd := int32(a[13]) - int32(b[13])
-	if d0 < 0 {
-		d0 = -d0
-	}
-	if d1 < 0 {
-		d1 = -d1
-	}
-	if d2 < 0 {
-		d2 = -d2
-	}
-	if d3 < 0 {
-		d3 = -d3
-	}
-	if d4 < 0 {
-		d4 = -d4
-	}
-	if d5 < 0 {
-		d5 = -d5
-	}
-	if d6 < 0 {
-		d6 = -d6
-	}
-	if d7 < 0 {
-		d7 = -d7
-	}
-	if d8 < 0 {
-		d8 = -d8
-	}
-	if d9 < 0 {
-		d9 = -d9
-	}
-	if da < 0 {
-		da = -da
-	}
-	if db < 0 {
-		db = -db
-	}
-	if dc < 0 {
-		dc = -dc
-	}
-	if dd < 0 {
-		dd = -dd
-	}
-	return d0 + d1 + d2 + d3 + d4 + d5 + d6 + d7 + d8 + d9 + da + db + dc + dd
+	return d0*d0 + d1*d1 + d2*d2 + d3*d3 + d4*d4 + d5*d5 + d6*d6 + d7*d7 + d8*d8 + d9*d9 + da*da + db*db + dc*dc + dd*dd
 }
 
 func (idx *IVFIndex) saveBinary(path string) error {
@@ -671,7 +629,7 @@ func (sub *SubIndex) buildCentroidIndex() {
 			best := 0
 			bestDist := int32(1<<31 - 1)
 			for m := 0; m < mc; m++ {
-				d := manhattanDist(sub.Centroids[i], meta[m])
+				d := euclideanDistSq(sub.Centroids[i], meta[m])
 				if d < bestDist {
 					bestDist = d
 					best = m

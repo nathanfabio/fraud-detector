@@ -48,45 +48,59 @@ func HandleConn(conn net.Conn, h *handler.FraudHandler) {
 		connBufPool.Put(buf)
 		return
 	}
-	data := buf[:n]
+	fraudCount, ok := processRequest(buf[:n], conn, n, h)
+	connBufPool.Put(buf)
+	if ok {
+		conn.Write(httpResponses[fraudCount])
+	}
+}
 
+func HandleConnWithBuf(conn net.Conn, h *handler.FraudHandler, buf []byte) {
+	defer conn.Close()
+
+	buf = buf[:cap(buf)]
+	n, err := conn.Read(buf)
+	if err != nil || n < 4 {
+		return
+	}
+	fraudCount, ok := processRequest(buf[:n], conn, n, h)
+	if ok {
+		conn.Write(httpResponses[fraudCount])
+	}
+}
+
+func processRequest(data []byte, conn net.Conn, n int, h *handler.FraudHandler) (int, bool) {
 	if bytes.HasPrefix(data, prefixGET) {
 		if h.IsReady() {
 			conn.Write(readyHTTP)
-		} else {
-			conn.Write(serviceUnavailableHTTP)
 		}
-		connBufPool.Put(buf)
-		return
+		return 0, false
 	}
 
 	if !bytes.HasPrefix(data, prefixPOST) {
 		conn.Write(badRequestHTTP)
-		connBufPool.Put(buf)
-		return
+		return 0, false
 	}
 
 	if !h.IsReady() {
 		conn.Write(serviceUnavailableHTTP)
-		connBufPool.Put(buf)
-		return
+		return 0, false
 	}
 
+	buf := data[:cap(data)]
 	hdrsIdx := bytes.Index(data, hdrsEnd)
-	for hdrsIdx < 0 && n < cap(buf) {
+	for hdrsIdx < 0 && n < cap(data) {
 		nn, rerr := conn.Read(buf[n:])
 		if rerr != nil {
 			conn.Write(badRequestHTTP)
-			connBufPool.Put(buf)
-			return
+			return 0, false
 		}
 		n += nn
 		hdrsIdx = bytes.Index(buf[:n], hdrsEnd)
 	}
 	if hdrsIdx < 0 {
 		conn.Write(badRequestHTTP)
-		connBufPool.Put(buf)
-		return
+		return 0, false
 	}
 
 	bodyStart := hdrsIdx + 4
@@ -110,13 +124,10 @@ func HandleConn(conn net.Conn, h *handler.FraudHandler) {
 
 	if len(body) == 0 {
 		conn.Write(badRequestHTTP)
-		connBufPool.Put(buf)
-		return
+		return 0, false
 	}
 
-	fraudCount := h.Process(body)
-	connBufPool.Put(buf)
-	conn.Write(httpResponses[fraudCount])
+	return h.Process(body), true
 }
 
 func parseContentLength(hdrs []byte) int {

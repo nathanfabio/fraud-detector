@@ -7,11 +7,27 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"runtime"
+
 	"fraud-detector/internal/config"
 	"fraud-detector/internal/handler"
 	"fraud-detector/internal/index"
 	"fraud-detector/internal/server"
 )
+
+const numWorkers = 4
+
+type worker struct {
+	buf      []byte
+	connChan chan net.Conn
+}
+
+func (w *worker) run(h *handler.FraudHandler) {
+	buf := w.buf
+	for conn := range w.connChan {
+		server.HandleConnWithBuf(conn, h, buf)
+	}
+}
 
 func main() {
 	buildIndexIn := flag.String("build-index-in", "", "JSON.GZ to build index from")
@@ -27,6 +43,8 @@ func main() {
 		return
 	}
 
+	runtime.GOMAXPROCS(2)
+
 	normCfg, err := config.LoadNormalization("resources/normalization.json")
 	if err != nil {
 		log.Fatalf("Failed to load normalization: %v", err)
@@ -38,11 +56,26 @@ func main() {
 
 	h := handler.New(normCfg, mccRisk, nil)
 
-	server.InitHTTP([]byte(`{"ready":true,"build":"v11-rawhttp"}`), handler.ResponseTemplates)
+	server.InitHTTP([]byte(`{"ready":true,"build":"v15-euclidean"}`), handler.ResponseTemplates)
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /ready", h.Ready)
 	mux.HandleFunc("POST /fraud-score", h.Score)
+
+	workers := make([]worker, numWorkers)
+	for i := 0; i < numWorkers; i++ {
+		workers[i] = worker{
+			buf:      make([]byte, 4096),
+			connChan: make(chan net.Conn, 64),
+		}
+		go workers[i].run(h)
+	}
+
+	rr := 0
+	dispatch := func(conn net.Conn) {
+		workers[rr].connChan <- conn
+		rr = (rr + 1) % numWorkers
+	}
 
 	hostname, _ := os.Hostname()
 	sockPath := fmt.Sprintf("/run/sock/%s.sock", hostname)
@@ -60,7 +93,7 @@ func main() {
 				if aerr != nil {
 					break
 				}
-				go server.HandleConn(conn, h)
+				dispatch(conn)
 			}
 		}()
 	}

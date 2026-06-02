@@ -29,13 +29,13 @@ var (
 	keyMerchant        = []byte("merchant")
 )
 
-func ParseAndBuild(body []byte, cfg *config.Normalization, mccRisk map[string]float64) Vec14 {
+func ParseAndBuild(body []byte, cfg *config.Normalization) Vec14 {
 	var txAmount, txInstallments float64
 	var custAvgAmount, txCount24h, merchantAvgAmount float64
 	var kmFromHome, kmFromCurrent float64
 	var isOnline, cardPresent, unknownMerchant bool
 	var requestedAtStr, lastTxAtStr string
-	var mcc string
+	var mccBytes []byte
 	var merchantIDBytes []byte
 	var knownMerchantsRaw []byte
 	hasLastTx := false
@@ -89,7 +89,7 @@ func ParseAndBuild(body []byte, cfg *config.Normalization, mccRisk map[string]fl
 			case bytes.Equal(key, keyKnownMerchants):
 				knownMerchantsRaw, pos = extractRawArray(body, pos)
 			case bytes.Equal(key, keyMCC):
-				mcc, pos = extractString(body, pos)
+				mccBytes, pos = extractBytes(body, pos)
 			case bytes.Equal(key, keyIsOnline):
 				isOnline, pos = extractBool(body, pos)
 			case bytes.Equal(key, keyCardPresent):
@@ -139,7 +139,7 @@ func ParseAndBuild(body []byte, cfg *config.Normalization, mccRisk map[string]fl
 		merchantAvgAmount, kmFromHome, kmFromCurrent,
 		isOnline, cardPresent, unknownMerchant,
 		requestedAtStr, lastTxAtStr, hasLastTx,
-		mcc, cfg, mccRisk)
+		mccBytes, cfg)
 }
 
 func extractBytes(data []byte, pos int) ([]byte, int) {
@@ -319,8 +319,8 @@ func buildVector(
 	kmFromHome, kmFromCurrent float64,
 	isOnline, cardPresent, unknownMerchant bool,
 	requestedAtStr, lastTxAtStr string, hasLastTx bool,
-	mcc string,
-	cfg *config.Normalization, mccRisk map[string]float64,
+	mccBytes []byte,
+	cfg *config.Normalization,
 ) Vec14 {
 	var vec Vec14
 
@@ -383,10 +383,7 @@ func buildVector(
 		vec[11] = 127
 	}
 
-	risk, ok := mccRisk[mcc]
-	if !ok {
-		risk = 0.5
-	}
+	risk := fastMCCRisk(mccBytes)
 	vec[12] = int8(math.Round(risk * 127.0))
 
 	vec[13] = quantize(merchantAvgAmount / cfg.MaxMerchantAvgAmount)
@@ -395,6 +392,36 @@ func buildVector(
 }
 
 var monthDays = []int{0, 31, 59, 90, 120, 151, 181, 212, 243, 273, 304, 334}
+
+func fastMCCRisk(b []byte) float64 {
+	if len(b) != 4 {
+		return 0.5
+	}
+	k := uint32(b[0])<<24 | uint32(b[1])<<16 | uint32(b[2])<<8 | uint32(b[3])
+	switch k {
+	case 0x35343131:
+		return 0.15
+	case 0x35383132:
+		return 0.30
+	case 0x35393132:
+		return 0.20
+	case 0x35393434:
+		return 0.45
+	case 0x37383031:
+		return 0.80
+	case 0x37383032:
+		return 0.75
+	case 0x37393935:
+		return 0.85
+	case 0x34353131:
+		return 0.35
+	case 0x35333131:
+		return 0.25
+	case 0x35393939:
+		return 0.50
+	}
+	return 0.5
+}
 
 func fastParseTimestamp(s string) (hour, dow, minOfYear int, ok bool) {
 	if len(s) < 17 {

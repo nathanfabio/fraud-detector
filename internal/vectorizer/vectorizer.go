@@ -138,91 +138,20 @@ func isUnknownMerchant(merchantID string, known []string) bool {
 	return true
 }
 
-func ManhattanDist(a, b Vec14) int32 {
-	var sum int32
-	da := int32(a[0]) - int32(b[0])
-	if da < 0 {
-		sum -= da
-	} else {
-		sum += da
-	}
-	da = int32(a[1]) - int32(b[1])
-	if da < 0 {
-		sum -= da
-	} else {
-		sum += da
-	}
-	da = int32(a[2]) - int32(b[2])
-	if da < 0 {
-		sum -= da
-	} else {
-		sum += da
-	}
-	da = int32(a[3]) - int32(b[3])
-	if da < 0 {
-		sum -= da
-	} else {
-		sum += da
-	}
-	da = int32(a[4]) - int32(b[4])
-	if da < 0 {
-		sum -= da
-	} else {
-		sum += da
-	}
-	da = int32(a[5]) - int32(b[5])
-	if da < 0 {
-		sum -= da
-	} else {
-		sum += da
-	}
-	da = int32(a[6]) - int32(b[6])
-	if da < 0 {
-		sum -= da
-	} else {
-		sum += da
-	}
-	da = int32(a[7]) - int32(b[7])
-	if da < 0 {
-		sum -= da
-	} else {
-		sum += da
-	}
-	da = int32(a[8]) - int32(b[8])
-	if da < 0 {
-		sum -= da
-	} else {
-		sum += da
-	}
-	da = int32(a[9]) - int32(b[9])
-	if da < 0 {
-		sum -= da
-	} else {
-		sum += da
-	}
-	da = int32(a[10]) - int32(b[10])
-	if da < 0 {
-		sum -= da
-	} else {
-		sum += da
-	}
-	da = int32(a[11]) - int32(b[11])
-	if da < 0 {
-		sum -= da
-	} else {
-		sum += da
-	}
-	da = int32(a[12]) - int32(b[12])
-	if da < 0 {
-		sum -= da
-	} else {
-		sum += da
-	}
-	da = int32(a[13]) - int32(b[13])
-	if da < 0 {
-		sum -= da
-	} else {
-		sum += da
-	}
-	return sum
+func EuclideanDistSq(a, b Vec14) int32 {
+	d0 := int32(a[0]) - int32(b[0])
+	d1 := int32(a[1]) - int32(b[1])
+	d2 := int32(a[2]) - int32(b[2])
+	d3 := int32(a[3]) - int32(b[3])
+	d4 := int32(a[4]) - int32(b[4])
+	d5 := int32(a[5]) - int32(b[5])
+	d6 := int32(a[6]) - int32(b[6])
+	d7 := int32(a[7]) - int32(b[7])
+	d8 := int32(a[8]) - int32(b[8])
+	d9 := int32(a[9]) - int32(b[9])
+	da := int32(a[10]) - int32(b[10])
+	db := int32(a[11]) - int32(b[11])
+	dc := int32(a[12]) - int32(b[12])
+	dd := int32(a[13]) - int32(b[13])
+	return d0*d0 + d1*d1 + d2*d2 + d3*d3 + d4*d4 + d5*d5 + d6*d6 + d7*d7 + d8*d8 + d9*d9 + da*da + db*db + dc*dc + dd*dd
 }
