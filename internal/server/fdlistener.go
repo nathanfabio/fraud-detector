@@ -3,13 +3,12 @@ package server
 import (
 	"net"
 	"os"
-	"sync"
 	"syscall"
 )
 
 type fdListener struct {
-	mu   sync.Mutex
 	conn *net.UnixConn
+	oob  []byte
 }
 
 func ListenFD(sockPath string) (net.Listener, error) {
@@ -26,20 +25,19 @@ func ListenFD(sockPath string) (net.Listener, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &fdListener{conn: lbConn}, nil
+	return &fdListener{
+		conn: lbConn,
+		oob:  make([]byte, syscall.CmsgSpace(4)),
+	}, nil
 }
 
 func (l *fdListener) Accept() (net.Conn, error) {
-	l.mu.Lock()
-	defer l.mu.Unlock()
-
 	var buf [1]byte
-	oob := make([]byte, syscall.CmsgSpace(4))
-	_, oobn, _, _, err := l.conn.ReadMsgUnix(buf[:], oob)
+	_, oobn, _, _, err := l.conn.ReadMsgUnix(buf[:], l.oob)
 	if err != nil {
 		return nil, err
 	}
-	scms, err := syscall.ParseSocketControlMessage(oob[:oobn])
+	scms, err := syscall.ParseSocketControlMessage(l.oob[:oobn])
 	if err != nil || len(scms) == 0 {
 		return nil, net.ErrClosed
 	}

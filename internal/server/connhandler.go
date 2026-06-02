@@ -1,11 +1,9 @@
 package server
 
 import (
-	"bufio"
+	"bytes"
 	"fmt"
-	"io"
 	"net"
-	"net/http"
 	"sync"
 
 	"fraud-detector/internal/handler"
@@ -16,7 +14,7 @@ var readyHTTP []byte
 var badRequestHTTP = []byte("HTTP/1.1 400 Bad Request\r\nContent-Length: 0\r\n\r\n")
 var serviceUnavailableHTTP = []byte("HTTP/1.1 503 Service Unavailable\r\nContent-Length: 0\r\n\r\n")
 
-var connBodyPool = sync.Pool{
+var connBufPool = sync.Pool{
 	New: func() interface{} { return make([]byte, 4096) },
 }
 
@@ -33,46 +31,107 @@ func InitHTTP(readyJSON []byte, templates [6][]byte) {
 	copy(readyHTTP[len(hdr):], readyJSON)
 }
 
+var (
+	prefixGET     = []byte("GET /ready")
+	prefixPOST    = []byte("POST /fraud-score")
+	hdrsEnd       = []byte("\r\n\r\n")
+	contentLenHdr = []byte("Content-Length:")
+)
+
 func HandleConn(conn net.Conn, h *handler.FraudHandler) {
 	defer conn.Close()
 
-	reader := bufio.NewReaderSize(conn, 2048)
-	req, err := http.ReadRequest(reader)
-	if err != nil {
+	buf := connBufPool.Get().([]byte)
+	buf = buf[:cap(buf)]
+	n, err := conn.Read(buf)
+	if err != nil || n < 4 {
+		connBufPool.Put(buf)
 		return
 	}
+	data := buf[:n]
 
-	switch {
-	case req.Method == "GET" && req.URL.Path == "/ready":
+	if bytes.HasPrefix(data, prefixGET) {
 		if h.IsReady() {
 			conn.Write(readyHTTP)
 		} else {
 			conn.Write(serviceUnavailableHTTP)
 		}
-
-	case req.Method == "POST" && req.URL.Path == "/fraud-score":
-		if !h.IsReady() {
-			conn.Write(serviceUnavailableHTTP)
-			return
-		}
-		buf := connBodyPool.Get().([]byte)
-		n, err := io.ReadFull(req.Body, buf[:cap(buf)])
-		req.Body.Close()
-		if err != nil && err != io.ErrUnexpectedEOF && err != io.EOF {
-			connBodyPool.Put(buf)
-			conn.Write(badRequestHTTP)
-			return
-		}
-		if n == 0 {
-			connBodyPool.Put(buf)
-			conn.Write(badRequestHTTP)
-			return
-		}
-		fraudCount := h.Process(buf[:n])
-		connBodyPool.Put(buf)
-		conn.Write(httpResponses[fraudCount])
-
-	default:
-		conn.Write(badRequestHTTP)
+		connBufPool.Put(buf)
+		return
 	}
+
+	if !bytes.HasPrefix(data, prefixPOST) {
+		conn.Write(badRequestHTTP)
+		connBufPool.Put(buf)
+		return
+	}
+
+	if !h.IsReady() {
+		conn.Write(serviceUnavailableHTTP)
+		connBufPool.Put(buf)
+		return
+	}
+
+	hdrsIdx := bytes.Index(data, hdrsEnd)
+	for hdrsIdx < 0 && n < cap(buf) {
+		nn, rerr := conn.Read(buf[n:])
+		if rerr != nil {
+			conn.Write(badRequestHTTP)
+			connBufPool.Put(buf)
+			return
+		}
+		n += nn
+		hdrsIdx = bytes.Index(buf[:n], hdrsEnd)
+	}
+	if hdrsIdx < 0 {
+		conn.Write(badRequestHTTP)
+		connBufPool.Put(buf)
+		return
+	}
+
+	bodyStart := hdrsIdx + 4
+	cl := parseContentLength(buf[:hdrsIdx])
+
+	need := bodyStart + cl
+	for n < need && n < cap(buf) {
+		nn, rerr := conn.Read(buf[n:])
+		if rerr != nil {
+			break
+		}
+		n += nn
+	}
+
+	var body []byte
+	if need <= n {
+		body = buf[bodyStart:need]
+	} else {
+		body = buf[bodyStart:n]
+	}
+
+	if len(body) == 0 {
+		conn.Write(badRequestHTTP)
+		connBufPool.Put(buf)
+		return
+	}
+
+	fraudCount := h.Process(body)
+	connBufPool.Put(buf)
+	conn.Write(httpResponses[fraudCount])
+}
+
+func parseContentLength(hdrs []byte) int {
+	idx := bytes.Index(hdrs, contentLenHdr)
+	if idx < 0 {
+		return 0
+	}
+	idx += 15
+	for idx < len(hdrs) && hdrs[idx] == ' ' {
+		idx++
+	}
+	val := 0
+	for idx < len(hdrs) && hdrs[idx] >= '0' && hdrs[idx] <= '9' {
+		val = val*10 + int(hdrs[idx]-'0')
+		idx++
+	}
+	return val
 }
