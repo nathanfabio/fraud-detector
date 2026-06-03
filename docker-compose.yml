@@ -1,9 +1,9 @@
 services:
   lb:
-    image: nathanfabio/fraud-detector4:v16
-    command: ["./lb"]
+    image: nathanfabio/fraud-detector4:v17
+    command: ["./lb", "9999", "/run/sock/api1.sock", "/run/sock/api2.sock"]
     ports:
-      - "9999:80"
+      - "9999:9999"
     volumes:
       - sock-vol:/run/sock:rw
     depends_on:
@@ -15,28 +15,22 @@ services:
     cpus: "0.05"
 
   api1:
-    image: nathanfabio/fraud-detector4:v16
+    image: nathanfabio/fraud-detector4:v17
     command: ["./server"]
     hostname: api1
     volumes:
       - sock-vol:/run/sock:rw
-    environment:
-      - GOMAXPROCS=1
-      - GOGC=off
     networks:
       - app-net
     mem_limit: 170m
     cpus: "0.475"
 
   api2:
-    image: nathanfabio/fraud-detector4:v16
+    image: nathanfabio/fraud-detector4:v17
     command: ["./server"]
     hostname: api2
     volumes:
       - sock-vol:/run/sock:rw
-    environment:
-      - GOMAXPROCS=1
-      - GOGC=off
     networks:
       - app-net
     mem_limit: 170m
