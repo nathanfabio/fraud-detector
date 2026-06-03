@@ -343,8 +343,8 @@ func buildVector(
 		vec[2] = quantize(txAmount / cfg.AmountVsAvgRatio)
 	}
 
-	vec[3] = int8(math.Round(float64(reqHour) / 23.0 * 127.0))
-	vec[4] = int8(math.Round(float64(reqDow) / 6.0 * 127.0))
+	vec[3] = int16(math.Round(float64(reqHour) / 23.0 * 10000.0))
+	vec[4] = int16(math.Round(float64(reqDow) / 6.0 * 10000.0))
 
 	if hasLastTx && lastTxAtStr != "" {
 		_, _, lastMinOfYear, valid2 := fastParseTimestamp(lastTxAtStr)
@@ -361,30 +361,30 @@ func buildVector(
 				minutes := requestedAt.Sub(lastTs).Minutes()
 				vec[5] = quantize(minutes / cfg.MaxMinutes)
 			} else {
-				vec[5] = -1
+				vec[5] = -10000
 			}
 		}
 		vec[6] = quantize(kmFromCurrent / cfg.MaxKm)
 	} else {
-		vec[5] = -1
-		vec[6] = -1
+		vec[5] = -10000
+		vec[6] = -10000
 	}
 
 	vec[7] = quantize(kmFromHome / cfg.MaxKm)
 	vec[8] = quantize(txCount24h / cfg.MaxTxCount24h)
 
 	if isOnline {
-		vec[9] = 127
+		vec[9] = 10000
 	}
 	if cardPresent {
-		vec[10] = 127
+		vec[10] = 10000
 	}
 	if unknownMerchant {
-		vec[11] = 127
+		vec[11] = 10000
 	}
 
 	risk := fastMCCRisk(mccBytes)
-	vec[12] = int8(math.Round(risk * 127.0))
+	vec[12] = int16(math.Round(risk * 10000.0))
 
 	vec[13] = quantize(merchantAvgAmount / cfg.MaxMerchantAvgAmount)
 
