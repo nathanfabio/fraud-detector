@@ -13,6 +13,11 @@ services:
       - app-net
     mem_limit: 8m
     cpus: "0.05"
+    ulimits:
+      memlock: -1
+      nofile:
+        soft: 65535
+        hard: 65535
 
   api1:
     image: nathanfabio/fraud-detector4:v18
@@ -24,6 +29,11 @@ services:
       - app-net
     mem_limit: 170m
     cpus: "0.475"
+    ulimits:
+      memlock: -1
+      nofile:
+        soft: 65535
+        hard: 65535
 
   api2:
     image: nathanfabio/fraud-detector4:v18
@@ -35,6 +45,11 @@ services:
       - app-net
     mem_limit: 170m
     cpus: "0.475"
+    ulimits:
+      memlock: -1
+      nofile:
+        soft: 65535
+        hard: 65535
 
 volumes:
   sock-vol:
