@@ -246,6 +246,7 @@ func setRealtimePriority() {
 
 func die(msg string) {
 	os.Stderr.WriteString(msg + "\n")
+	os.Stderr.Sync()
 	os.Exit(1)
 }
 
@@ -268,7 +269,7 @@ func main() {
 	setRealtimePriority()
 
 	debug.SetGCPercent(-1)
-	debug.SetMemoryLimit(160 << 20)
+	debug.SetMemoryLimit(165 << 20)
 
 	unix.Prctl(unix.PR_SET_TIMERSLACK, 1, 0, 0, 0)
 	_ = unix.Mlockall(unix.MCL_CURRENT | unix.MCL_FUTURE)

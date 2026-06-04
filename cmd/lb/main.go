@@ -116,7 +116,7 @@ func main() {
 
 	for _, p := range paths {
 		bfd := -1
-		for r := 0; r < 50; r++ {
+		for r := 0; r < 300; r++ {
 			fd, e := unix.Socket(unix.AF_UNIX, unix.SOCK_STREAM|unix.SOCK_CLOEXEC, 0)
 			if e == nil {
 				if unix.Connect(fd, &unix.SockaddrUnix{Name: p}) == nil {
