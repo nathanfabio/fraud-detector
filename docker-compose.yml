@@ -1,6 +1,6 @@
 services:
   lb:
-    image: nathanfabio/fraud-detector4:v21
+    image: nathanfabio/fraud-detector4:v22
     command: ["./lb", "9999", "/run/sock/api1.sock", "/run/sock/api2.sock"]
     ports:
       - "9999:9999"
@@ -13,14 +13,9 @@ services:
       - app-net
     mem_limit: 8m
     cpus: "0.05"
-    ulimits:
-      memlock: -1
-      nofile:
-        soft: 65535
-        hard: 65535
 
   api1:
-    image: nathanfabio/fraud-detector4:v21
+    image: nathanfabio/fraud-detector4:v22
     command: ["./server"]
     hostname: api1
     volumes:
@@ -29,14 +24,9 @@ services:
       - app-net
     mem_limit: 170m
     cpus: "0.475"
-    ulimits:
-      memlock: -1
-      nofile:
-        soft: 65535
-        hard: 65535
 
   api2:
-    image: nathanfabio/fraud-detector4:v21
+    image: nathanfabio/fraud-detector4:v22
     command: ["./server"]
     hostname: api2
     volumes:
@@ -45,11 +35,6 @@ services:
       - app-net
     mem_limit: 170m
     cpus: "0.475"
-    ulimits:
-      memlock: -1
-      nofile:
-        soft: 65535
-        hard: 65535
 
 volumes:
   sock-vol:

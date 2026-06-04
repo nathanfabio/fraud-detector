@@ -241,12 +241,11 @@ type schedParam struct{ priority int32 }
 
 func setRealtimePriority() {
 	p := schedParam{priority: 10}
-	_, _, _ = unix.Syscall(unix.SYS_SCHED_SETSCHEDULER, 0, uintptr(1), uintptr(unsafe.Pointer(&p)))
+	unix.Syscall(unix.SYS_SCHED_SETSCHEDULER, 0, uintptr(1), uintptr(unsafe.Pointer(&p)))
 }
 
 func die(msg string) {
 	os.Stderr.WriteString(msg + "\n")
-	os.Stderr.Sync()
 	os.Exit(1)
 }
 
@@ -272,7 +271,7 @@ func main() {
 	debug.SetMemoryLimit(165 << 20)
 
 	unix.Prctl(unix.PR_SET_TIMERSLACK, 1, 0, 0, 0)
-	_ = unix.Mlockall(unix.MCL_CURRENT | unix.MCL_FUTURE)
+	unix.Mlockall(unix.MCL_CURRENT | unix.MCL_FUTURE)
 
 	normCfg, err := config.LoadNormalization("resources/normalization.json")
 	if err != nil {
