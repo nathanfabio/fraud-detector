@@ -14,11 +14,13 @@ import (
 
 const dims = 14
 const topK = 5
-const nprobe = 128
-const ivfMagic = 0x04415649
+const nprobe = 24
+const ivfMagic = 0x05415649
 
 const numPartitions = 16
-const clustersPerPartition = 400
+const maxClusters = 2048
+const minClusters = 64
+const clusterDivisor = 300
 
 type Vector [dims]int8
 
@@ -26,6 +28,8 @@ type SubIndex struct {
 	Vectors     []Vector
 	Labels      []uint8
 	Centroids   []Vector
+	BBoxMin     []Vector
+	BBoxMax     []Vector
 	Offsets     []int
 	NumClusters int
 }
@@ -158,12 +162,38 @@ func loadJSON(path string) ([]rawRecord, error) {
 	return records, nil
 }
 
+func clusterCount(n int) int {
+	k := n / clusterDivisor
+	if k < minClusters {
+		k = minClusters
+	}
+	if k > maxClusters {
+		k = maxClusters
+	}
+	if k > n {
+		k = n
+	}
+	return k
+}
+
+type vecDist struct {
+	idx  int
+	dist int32
+}
+
+func insertSortVecDist(vd []vecDist) {
+	for i := 1; i < len(vd); i++ {
+		j := i
+		for j > 0 && vd[j].dist < vd[j-1].dist {
+			vd[j], vd[j-1] = vd[j-1], vd[j]
+			j--
+		}
+	}
+}
+
 func buildSub(records []rawRecord) *SubIndex {
 	n := len(records)
-	nc := clustersPerPartition
-	if nc > n {
-		nc = n
-	}
+	nc := clusterCount(n)
 	if nc < 1 {
 		return &SubIndex{}
 	}
@@ -277,10 +307,49 @@ func buildSub(records []rawRecord) *SubIndex {
 		byCluster[assignments[i]] = append(byCluster[assignments[i]], i)
 	}
 
+	bboxMin := make([]Vector, nc)
+	bboxMax := make([]Vector, nc)
+	for c := 0; c < nc; c++ {
+		if len(byCluster[c]) == 0 {
+			continue
+		}
+		first := records[byCluster[c][0]].vec
+		bboxMin[c] = first
+		bboxMax[c] = first
+		for _, origIdx := range byCluster[c] {
+			v := records[origIdx].vec
+			for d := 0; d < dims; d++ {
+				if v[d] < bboxMin[c][d] {
+					bboxMin[c][d] = v[d]
+				}
+				if v[d] > bboxMax[c][d] {
+					bboxMax[c][d] = v[d]
+				}
+			}
+		}
+	}
+
+	for c := 0; c < nc; c++ {
+		cluster := byCluster[c]
+		if len(cluster) <= 1 {
+			continue
+		}
+		vd := make([]vecDist, len(cluster))
+		for i, origIdx := range cluster {
+			vd[i] = vecDist{origIdx, euclideanDistSq(records[origIdx].vec, centroids[c])}
+		}
+		insertSortVecDist(vd)
+		for i := range cluster {
+			cluster[i] = vd[i].idx
+		}
+	}
+
 	sub := &SubIndex{
 		Vectors:     make([]Vector, n),
 		Labels:      make([]uint8, n),
 		Centroids:   centroids,
+		BBoxMin:     bboxMin,
+		BBoxMax:     bboxMax,
 		Offsets:     make([]int, nc+1),
 		NumClusters: nc,
 	}
@@ -299,31 +368,59 @@ func buildSub(records []rawRecord) *SubIndex {
 	return sub
 }
 
+func bboxDistSq(query *Vector, bmin, bmax *Vector) int32 {
+	var sum int32
+	for d := 0; d < dims; d++ {
+		q := int32(query[d])
+		lo := int32(bmin[d])
+		hi := int32(bmax[d])
+		if q < lo {
+			diff := lo - q
+			sum += diff * diff
+		} else if q > hi {
+			diff := q - hi
+			sum += diff * diff
+		}
+	}
+	return sum
+}
+
+type probeEntry struct {
+	c    int
+	dist int32
+}
+
+func insertProbe(probes *[]probeEntry, c int, dist int32) {
+	for i := len(*probes) - 1; i >= 0; i-- {
+		if dist >= (*probes)[i].dist {
+			idx := i + 1
+			if idx < nprobe {
+				if len(*probes) < nprobe {
+					*probes = append(*probes, probeEntry{})
+				}
+				copy((*probes)[idx+1:], (*probes)[idx:len(*probes)-1])
+				(*probes)[idx] = probeEntry{c, dist}
+			}
+			return
+		}
+	}
+	if len(*probes) < nprobe {
+		*probes = append(*probes, probeEntry{})
+	}
+	copy((*probes)[1:], (*probes)[:len(*probes)-1])
+	(*probes)[0] = probeEntry{c, dist}
+}
+
 func (sub *SubIndex) search(query *Vector) int {
 	if sub.NumClusters == 0 {
 		return 0
 	}
 
-	var bestClusters [nprobe]struct {
-		c    int
-		dist int32
-	}
-	for i := 0; i < nprobe; i++ {
-		bestClusters[i].c = -1
-		bestClusters[i].dist = math.MaxInt32
-	}
+	probes := make([]probeEntry, 0, nprobe)
 
 	for c := 0; c < sub.NumClusters; c++ {
-		d := euclideanDistSq(*query, sub.Centroids[c])
-		j := nprobe - 1
-		for j > 0 && d < bestClusters[j-1].dist {
-			bestClusters[j] = bestClusters[j-1]
-			j--
-		}
-		if d < bestClusters[nprobe-1].dist {
-			bestClusters[j].c = c
-			bestClusters[j].dist = d
-		}
+		d := bboxDistSq(query, &sub.BBoxMin[c], &sub.BBoxMax[c])
+		insertProbe(&probes, c, d)
 	}
 
 	var bestDist [topK]int32
@@ -332,11 +429,8 @@ func (sub *SubIndex) search(query *Vector) int {
 		bestDist[i] = math.MaxInt32
 	}
 
-	for ci := 0; ci < nprobe; ci++ {
-		c := bestClusters[ci].c
-		if c < 0 {
-			continue
-		}
+	for ci := 0; ci < len(probes); ci++ {
+		c := probes[ci].c
 		start := sub.Offsets[c]
 		end := sub.Offsets[c+1]
 		threshold := bestDist[topK-1]
@@ -362,6 +456,43 @@ func (sub *SubIndex) search(query *Vector) int {
 	for i := 0; i < topK; i++ {
 		if bestLabels[i] == 1 {
 			fraudCount++
+		}
+	}
+
+	if fraudCount > 0 && fraudCount < topK {
+		var probedMap [maxClusters]bool
+		for _, p := range probes {
+			probedMap[p.c] = true
+		}
+		for c := 0; c < sub.NumClusters; c++ {
+			if probedMap[c] {
+				continue
+			}
+			start := sub.Offsets[c]
+			end := sub.Offsets[c+1]
+			threshold := bestDist[topK-1]
+
+			for i := start; i < end; i++ {
+				d := euclideanDistSqEarlyExit(*query, sub.Vectors[i], threshold)
+				if d >= threshold {
+					continue
+				}
+				j := topK - 1
+				for j > 0 && d < bestDist[j-1] {
+					bestDist[j] = bestDist[j-1]
+					bestLabels[j] = bestLabels[j-1]
+					j--
+				}
+				bestDist[j] = d
+				bestLabels[j] = sub.Labels[i]
+				threshold = bestDist[topK-1]
+			}
+		}
+		fraudCount = 0
+		for i := 0; i < topK; i++ {
+			if bestLabels[i] == 1 {
+				fraudCount++
+			}
 		}
 	}
 
@@ -476,7 +607,6 @@ func (idx *IVFIndex) saveBinary(path string) error {
 	b := make([]byte, 10)
 	binary.LittleEndian.PutUint32(b[0:4], ivfMagic)
 	binary.LittleEndian.PutUint16(b[4:6], numPartitions)
-	// bytes 6-10 reserved
 	if _, err := f.Write(b); err != nil {
 		return err
 	}
@@ -492,7 +622,7 @@ func (idx *IVFIndex) saveBinary(path string) error {
 			n = len(sub.Vectors)
 			nc = sub.NumClusters
 		}
-		offset += uint32(n*14 + n + nc*14 + (nc+1)*4)
+		offset += uint32(n*14 + n + nc*14 + nc*14 + nc*14 + (nc+1)*4)
 	}
 
 	for tag := 0; tag < numPartitions; tag++ {
@@ -524,6 +654,14 @@ func (idx *IVFIndex) saveBinary(path string) error {
 			raw := unsafe.Slice((*byte)(unsafe.Pointer(&c[0])), dims)
 			f.Write(raw)
 		}
+		for _, bm := range sub.BBoxMin {
+			raw := unsafe.Slice((*byte)(unsafe.Pointer(&bm[0])), dims)
+			f.Write(raw)
+		}
+		for _, bm := range sub.BBoxMax {
+			raw := unsafe.Slice((*byte)(unsafe.Pointer(&bm[0])), dims)
+			f.Write(raw)
+		}
 		offBytes := make([]byte, (sub.NumClusters+1)*4)
 		for i, o := range sub.Offsets {
 			binary.LittleEndian.PutUint32(offBytes[i*4:(i+1)*4], uint32(o))
@@ -551,7 +689,7 @@ func loadBinary(path string) (*IVFIndex, error) {
 
 	nParts := int(binary.LittleEndian.Uint16(header[4:6]))
 
-	offsets := make([]uint32, nParts)
+	totalOff := make([]uint32, nParts)
 	numVecs := make([]int, nParts)
 	numClus := make([]int, nParts)
 
@@ -560,7 +698,7 @@ func loadBinary(path string) (*IVFIndex, error) {
 		if _, err := io.ReadFull(f, entry); err != nil {
 			return nil, err
 		}
-		offsets[i] = binary.LittleEndian.Uint32(entry[0:4])
+		totalOff[i] = binary.LittleEndian.Uint32(entry[0:4])
 		numVecs[i] = int(binary.LittleEndian.Uint32(entry[4:8]))
 		numClus[i] = int(binary.LittleEndian.Uint16(entry[8:10]))
 	}
@@ -578,6 +716,8 @@ func loadBinary(path string) (*IVFIndex, error) {
 			Vectors:     make([]Vector, n),
 			Labels:      make([]uint8, n),
 			Centroids:   make([]Vector, nc),
+			BBoxMin:     make([]Vector, nc),
+			BBoxMax:     make([]Vector, nc),
 			Offsets:     make([]int, nc+1),
 			NumClusters: nc,
 		}
@@ -593,6 +733,18 @@ func loadBinary(path string) (*IVFIndex, error) {
 		}
 		for ci := 0; ci < nc; ci++ {
 			raw := unsafe.Slice((*byte)(unsafe.Pointer(&sub.Centroids[ci][0])), dims)
+			if _, err := io.ReadFull(f, raw); err != nil {
+				return nil, err
+			}
+		}
+		for ci := 0; ci < nc; ci++ {
+			raw := unsafe.Slice((*byte)(unsafe.Pointer(&sub.BBoxMin[ci][0])), dims)
+			if _, err := io.ReadFull(f, raw); err != nil {
+				return nil, err
+			}
+		}
+		for ci := 0; ci < nc; ci++ {
+			raw := unsafe.Slice((*byte)(unsafe.Pointer(&sub.BBoxMax[ci][0])), dims)
 			if _, err := io.ReadFull(f, raw); err != nil {
 				return nil, err
 			}
