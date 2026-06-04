@@ -1,7 +1,6 @@
 package handler
 
 import (
-	"encoding/json"
 	"io"
 	"net/http"
 	"sync"
@@ -102,17 +101,13 @@ func (h *FraudHandler) Warmup() {
 	if h.index == nil {
 		return
 	}
-	payloads := []string{
-		`{"id":"w","transaction":{"amount":41.12,"installments":2,"requested_at":"2026-03-11T18:45:53Z"},"customer":{"avg_amount":82.24,"tx_count_24h":3,"known_merchants":["M3","M16"]},"merchant":{"id":"M16","mcc":"5411","avg_amount":60.25},"terminal":{"is_online":false,"card_present":true,"km_from_home":29.23},"last_transaction":null}`,
-		`{"id":"x","transaction":{"amount":9505.97,"installments":10,"requested_at":"2026-03-14T05:15:12Z"},"customer":{"avg_amount":81.28,"tx_count_24h":20,"known_merchants":["M8","M7","M5"]},"merchant":{"id":"M68","mcc":"7802","avg_amount":54.86},"terminal":{"is_online":false,"card_present":true,"km_from_home":952.27},"last_transaction":null}`,
+	payloads := [][]byte{
+		[]byte(`{"id":"w","transaction":{"amount":41.12,"installments":2,"requested_at":"2026-03-11T18:45:53Z"},"customer":{"avg_amount":82.24,"tx_count_24h":3,"known_merchants":["M3","M16"]},"merchant":{"id":"M16","mcc":"5411","avg_amount":60.25},"terminal":{"is_online":false,"card_present":true,"km_from_home":29.23},"last_transaction":null}`),
+		[]byte(`{"id":"x","transaction":{"amount":9505.97,"installments":10,"requested_at":"2026-03-14T05:15:12Z"},"customer":{"avg_amount":81.28,"tx_count_24h":20,"known_merchants":["M8","M7","M5"]},"merchant":{"id":"M68","mcc":"7802","avg_amount":54.86},"terminal":{"is_online":false,"card_present":true,"km_from_home":952.27},"last_transaction":null}`),
 	}
-	var req vectorizer.Request
 	for round := 0; round < 16; round++ {
 		for _, p := range payloads {
-			if err := json.Unmarshal([]byte(p), &req); err != nil {
-				continue
-			}
-			vec := vectorizer.Build(&req, h.normCfg, h.mccRisk)
+			vec := vectorizer.ParseAndBuild(p, h.normCfg)
 			var v index.Vector
 			copy(v[:], vec[:])
 			h.index.Search(&v)
