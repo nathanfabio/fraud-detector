@@ -45,11 +45,11 @@ type LastTransaction struct {
 	KmFromCurrent float64 `json:"km_from_current"`
 }
 
-type Vec14 [14]int16
+type Vec14 [14]int8
 
-func quantize(v float64) int16 {
-	if v <= -100 {
-		return -10000
+func quantize(v float64) int8 {
+	if v == -1 {
+		return -1
 	}
 	if v < 0 {
 		v = 0
@@ -57,7 +57,7 @@ func quantize(v float64) int16 {
 	if v > 1 {
 		v = 1
 	}
-	return int16(math.Round(v * 10000.0))
+	return int8(math.Round(v * 127.0))
 }
 
 func Build(req *Request, cfg *config.Normalization, mccRisk map[string]float64) Vec14 {
@@ -77,11 +77,11 @@ func Build(req *Request, cfg *config.Normalization, mccRisk map[string]float64) 
 		vec[2] = quantize(req.TransactionData.Amount / cfg.AmountVsAvgRatio)
 	}
 
-	vec[3] = int16(math.Round(float64(requestedAt.Hour()) / 23.0 * 10000.0))
+	vec[3] = int8(math.Round(float64(requestedAt.Hour()) / 23.0 * 127.0))
 
 	dow := requestedAt.Weekday()
 	dayOfWeek := (int(dow) + 6) % 7
-	vec[4] = int16(math.Round(float64(dayOfWeek) / 6.0 * 10000.0))
+	vec[4] = int8(math.Round(float64(dayOfWeek) / 6.0 * 127.0))
 
 	if req.LastTransaction != nil {
 		lastTs, err := time.Parse(time.RFC3339, req.LastTransaction.Timestamp)
@@ -89,31 +89,31 @@ func Build(req *Request, cfg *config.Normalization, mccRisk map[string]float64) 
 			minutes := requestedAt.Sub(lastTs).Minutes()
 			vec[5] = quantize(minutes / cfg.MaxMinutes)
 		} else {
-			vec[5] = -10000
+			vec[5] = -1
 		}
 		vec[6] = quantize(req.LastTransaction.KmFromCurrent / cfg.MaxKm)
 	} else {
-		vec[5] = -10000
-		vec[6] = -10000
+		vec[5] = -1
+		vec[6] = -1
 	}
 
 	vec[7] = quantize(req.Terminal.KmFromHome / cfg.MaxKm)
 	vec[8] = quantize(float64(req.Customer.TxCount24h) / cfg.MaxTxCount24h)
 
 	if req.Terminal.IsOnline {
-		vec[9] = 10000
+		vec[9] = 127
 	} else {
 		vec[9] = 0
 	}
 
 	if req.Terminal.CardPresent {
-		vec[10] = 10000
+		vec[10] = 127
 	} else {
 		vec[10] = 0
 	}
 
 	if isUnknownMerchant(req.Merchant.ID, req.Customer.KnownMerchants) {
-		vec[11] = 10000
+		vec[11] = 127
 	} else {
 		vec[11] = 0
 	}
@@ -122,7 +122,7 @@ func Build(req *Request, cfg *config.Normalization, mccRisk map[string]float64) 
 	if !ok {
 		risk = 0.5
 	}
-	vec[12] = int16(math.Round(risk * 10000.0))
+	vec[12] = int8(math.Round(risk * 127.0))
 
 	vec[13] = quantize(req.Merchant.AvgAmount / cfg.MaxMerchantAvgAmount)
 
@@ -138,20 +138,20 @@ func isUnknownMerchant(merchantID string, known []string) bool {
 	return true
 }
 
-func EuclideanDistSq(a, b Vec14) int64 {
-	d0 := int64(a[0]) - int64(b[0])
-	d1 := int64(a[1]) - int64(b[1])
-	d2 := int64(a[2]) - int64(b[2])
-	d3 := int64(a[3]) - int64(b[3])
-	d4 := int64(a[4]) - int64(b[4])
-	d5 := int64(a[5]) - int64(b[5])
-	d6 := int64(a[6]) - int64(b[6])
-	d7 := int64(a[7]) - int64(b[7])
-	d8 := int64(a[8]) - int64(b[8])
-	d9 := int64(a[9]) - int64(b[9])
-	da := int64(a[10]) - int64(b[10])
-	db := int64(a[11]) - int64(b[11])
-	dc := int64(a[12]) - int64(b[12])
-	dd := int64(a[13]) - int64(b[13])
+func EuclideanDistSq(a, b Vec14) int32 {
+	d0 := int32(a[0]) - int32(b[0])
+	d1 := int32(a[1]) - int32(b[1])
+	d2 := int32(a[2]) - int32(b[2])
+	d3 := int32(a[3]) - int32(b[3])
+	d4 := int32(a[4]) - int32(b[4])
+	d5 := int32(a[5]) - int32(b[5])
+	d6 := int32(a[6]) - int32(b[6])
+	d7 := int32(a[7]) - int32(b[7])
+	d8 := int32(a[8]) - int32(b[8])
+	d9 := int32(a[9]) - int32(b[9])
+	da := int32(a[10]) - int32(b[10])
+	db := int32(a[11]) - int32(b[11])
+	dc := int32(a[12]) - int32(b[12])
+	dd := int32(a[13]) - int32(b[13])
 	return d0*d0 + d1*d1 + d2*d2 + d3*d3 + d4*d4 + d5*d5 + d6*d6 + d7*d7 + d8*d8 + d9*d9 + da*da + db*db + dc*dc + dd*dd
 }

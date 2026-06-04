@@ -14,16 +14,14 @@ import (
 
 const dims = 14
 const topK = 5
-const quantScale = 10000.0
-const quantSentinel = int16(-10000)
 const nprobe = 12
 const maxScanPerCluster = 200
-const ivfMagic = 0x02415649
+const ivfMagic = 0x03415649
 
 const numPartitions = 16
-const clustersPerPartition = 2048
+const clustersPerPartition = 400
 
-type Vector [dims]int16
+type Vector [dims]int8
 
 type SubIndex struct {
 	Vectors     []Vector
@@ -48,15 +46,15 @@ func PartitionTag(vec Vector) int {
 	if vec[11] != 0 {
 		tag |= 2
 	}
-	if vec[5] >= 0 {
+	if vec[5] != -1 {
 		tag |= 1
 	}
 	return tag
 }
 
-func quantize(v float64) int16 {
-	if v <= -100 {
-		return quantSentinel
+func quantize(v float64) int8 {
+	if v == -1 {
+		return -1
 	}
 	if v < 0 {
 		v = 0
@@ -64,7 +62,7 @@ func quantize(v float64) int16 {
 	if v > 1 {
 		v = 1
 	}
-	return int16(math.Round(v * quantScale))
+	return int8(math.Round(v * 127.0))
 }
 
 type rawRecord struct {
@@ -232,7 +230,7 @@ func buildSub(records []rawRecord) *SubIndex {
 		for _, idx := range perm {
 			v := records[idx].vec
 			bestC := 0
-			bestDist := int64(math.MaxInt64)
+			bestDist := int32(math.MaxInt32)
 			for c := 0; c < nc; c++ {
 				d := euclideanDistSq(v, centroids[c])
 				if d < bestDist {
@@ -250,7 +248,7 @@ func buildSub(records []rawRecord) *SubIndex {
 			if counts[c] > 0 {
 				cnt := float64(counts[c])
 				for d := 0; d < dims; d++ {
-					centroids[c][d] = int16(math.Round(acc[c][d] / cnt))
+					centroids[c][d] = int8(math.Round(acc[c][d] / cnt))
 				}
 			}
 		}
@@ -260,7 +258,7 @@ func buildSub(records []rawRecord) *SubIndex {
 	clusterCounts := make([]int, nc)
 	for i := 0; i < n; i++ {
 		bestC := 0
-		bestDist := int64(math.MaxInt64)
+		bestDist := int32(math.MaxInt32)
 		for c := 0; c < nc; c++ {
 			d := euclideanDistSq(records[i].vec, centroids[c])
 			if d < bestDist {
@@ -309,13 +307,13 @@ func (sub *SubIndex) search(query *Vector) int {
 
 	var bestClusters [nprobe]struct {
 		c    int
-		dist int64
+		dist int32
 	}
 	for i := 0; i < nprobe; i++ {
 		bestClusters[i] = struct {
 			c    int
-			dist int64
-		}{-1, math.MaxInt64}
+			dist int32
+		}{-1, math.MaxInt32}
 	}
 
 	for c := 0; c < sub.NumClusters; c++ {
@@ -328,15 +326,15 @@ func (sub *SubIndex) search(query *Vector) int {
 		if d < bestClusters[nprobe-1].dist {
 			bestClusters[j] = struct {
 				c    int
-				dist int64
+				dist int32
 			}{c, d}
 		}
 	}
 
-	var bestDist [topK]int64
+	var bestDist [topK]int32
 	var bestLabels [topK]uint8
 	for i := 0; i < topK; i++ {
-		bestDist[i] = math.MaxInt64
+		bestDist[i] = math.MaxInt32
 	}
 
 	for ci := 0; ci < nprobe; ci++ {
@@ -386,21 +384,21 @@ func (idx *IVFIndex) Search(query *Vector) int {
 	return sub.search(query)
 }
 
-func euclideanDistSq(a, b Vector) int64 {
-	d0 := int64(a[0]) - int64(b[0])
-	d1 := int64(a[1]) - int64(b[1])
-	d2 := int64(a[2]) - int64(b[2])
-	d3 := int64(a[3]) - int64(b[3])
-	d4 := int64(a[4]) - int64(b[4])
-	d5 := int64(a[5]) - int64(b[5])
-	d6 := int64(a[6]) - int64(b[6])
-	d7 := int64(a[7]) - int64(b[7])
-	d8 := int64(a[8]) - int64(b[8])
-	d9 := int64(a[9]) - int64(b[9])
-	da := int64(a[10]) - int64(b[10])
-	db := int64(a[11]) - int64(b[11])
-	dc := int64(a[12]) - int64(b[12])
-	dd := int64(a[13]) - int64(b[13])
+func euclideanDistSq(a, b Vector) int32 {
+	d0 := int32(a[0]) - int32(b[0])
+	d1 := int32(a[1]) - int32(b[1])
+	d2 := int32(a[2]) - int32(b[2])
+	d3 := int32(a[3]) - int32(b[3])
+	d4 := int32(a[4]) - int32(b[4])
+	d5 := int32(a[5]) - int32(b[5])
+	d6 := int32(a[6]) - int32(b[6])
+	d7 := int32(a[7]) - int32(b[7])
+	d8 := int32(a[8]) - int32(b[8])
+	d9 := int32(a[9]) - int32(b[9])
+	da := int32(a[10]) - int32(b[10])
+	db := int32(a[11]) - int32(b[11])
+	dc := int32(a[12]) - int32(b[12])
+	dd := int32(a[13]) - int32(b[13])
 	return d0*d0 + d1*d1 + d2*d2 + d3*d3 + d4*d4 + d5*d5 + d6*d6 + d7*d7 + d8*d8 + d9*d9 + da*da + db*db + dc*dc + dd*dd
 }
 
@@ -430,7 +428,7 @@ func (idx *IVFIndex) saveBinary(path string) error {
 			n = len(sub.Vectors)
 			nc = sub.NumClusters
 		}
-		offset += uint32(n*28 + n + nc*28 + (nc+1)*4)
+		offset += uint32(n*14 + n + nc*14 + (nc+1)*4)
 	}
 
 	for tag := 0; tag < numPartitions; tag++ {
@@ -454,7 +452,7 @@ func (idx *IVFIndex) saveBinary(path string) error {
 			continue
 		}
 		for _, v := range sub.Vectors {
-			raw := unsafe.Slice((*byte)(unsafe.Pointer(&v[0])), dims*2)
+			raw := unsafe.Slice((*byte)(unsafe.Pointer(&v[0])), dims)
 			f.Write(raw)
 		}
 		f.Write(sub.Labels)
@@ -521,7 +519,7 @@ func loadBinary(path string) (*IVFIndex, error) {
 		}
 
 		for vi := 0; vi < n; vi++ {
-			raw := unsafe.Slice((*byte)(unsafe.Pointer(&sub.Vectors[vi][0])), dims*2)
+			raw := unsafe.Slice((*byte)(unsafe.Pointer(&sub.Vectors[vi][0])), dims)
 			if _, err := io.ReadFull(f, raw); err != nil {
 				return nil, err
 			}
@@ -530,7 +528,7 @@ func loadBinary(path string) (*IVFIndex, error) {
 			return nil, err
 		}
 		for ci := 0; ci < nc; ci++ {
-			raw := unsafe.Slice((*byte)(unsafe.Pointer(&sub.Centroids[ci][0])), dims*2)
+			raw := unsafe.Slice((*byte)(unsafe.Pointer(&sub.Centroids[ci][0])), dims)
 			if _, err := io.ReadFull(f, raw); err != nil {
 				return nil, err
 			}
