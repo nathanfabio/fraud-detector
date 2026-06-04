@@ -457,7 +457,7 @@ func (idx *IVFIndex) saveBinary(path string) error {
 		}
 		f.Write(sub.Labels)
 		for _, c := range sub.Centroids {
-			raw := unsafe.Slice((*byte)(unsafe.Pointer(&c[0])), dims*2)
+			raw := unsafe.Slice((*byte)(unsafe.Pointer(&c[0])), dims)
 			f.Write(raw)
 		}
 		offBytes := make([]byte, (sub.NumClusters+1)*4)
