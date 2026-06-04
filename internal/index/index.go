@@ -14,7 +14,7 @@ import (
 
 const dims = 14
 const topK = 5
-const nprobe = 24
+const nprobe = 48
 const ivfMagic = 0x05415649
 
 const numPartitions = 16
@@ -466,6 +466,10 @@ func (sub *SubIndex) search(query *Vector) int {
 		}
 		for c := 0; c < sub.NumClusters; c++ {
 			if probedMap[c] {
+				continue
+			}
+			lb := bboxDistSq(query, &sub.BBoxMin[c], &sub.BBoxMax[c])
+			if lb >= bestDist[topK-1] {
 				continue
 			}
 			start := sub.Offsets[c]
