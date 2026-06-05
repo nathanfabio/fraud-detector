@@ -14,7 +14,7 @@ import (
 
 const dims = 14
 const topK = 5
-const nprobe = 48
+const nprobe = 24
 const ivfMagic = 0x05415649
 
 const numPartitions = 16
@@ -456,47 +456,6 @@ func (sub *SubIndex) search(query *Vector) int {
 	for i := 0; i < topK; i++ {
 		if bestLabels[i] == 1 {
 			fraudCount++
-		}
-	}
-
-	if fraudCount > 0 && fraudCount < topK {
-		var probedMap [maxClusters]bool
-		for _, p := range probes {
-			probedMap[p.c] = true
-		}
-		for c := 0; c < sub.NumClusters; c++ {
-			if probedMap[c] {
-				continue
-			}
-			lb := bboxDistSq(query, &sub.BBoxMin[c], &sub.BBoxMax[c])
-			if lb >= bestDist[topK-1] {
-				continue
-			}
-			start := sub.Offsets[c]
-			end := sub.Offsets[c+1]
-			threshold := bestDist[topK-1]
-
-			for i := start; i < end; i++ {
-				d := euclideanDistSqEarlyExit(*query, sub.Vectors[i], threshold)
-				if d >= threshold {
-					continue
-				}
-				j := topK - 1
-				for j > 0 && d < bestDist[j-1] {
-					bestDist[j] = bestDist[j-1]
-					bestLabels[j] = bestLabels[j-1]
-					j--
-				}
-				bestDist[j] = d
-				bestLabels[j] = sub.Labels[i]
-				threshold = bestDist[topK-1]
-			}
-		}
-		fraudCount = 0
-		for i := 0; i < topK; i++ {
-			if bestLabels[i] == 1 {
-				fraudCount++
-			}
 		}
 	}
 
