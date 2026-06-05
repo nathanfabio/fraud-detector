@@ -14,7 +14,7 @@ import (
 
 const dims = 14
 const topK = 5
-const nprobe = 12
+const nprobe = 18
 const ivfMagic = 0x06415649
 
 const numPartitions = 16
