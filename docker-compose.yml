@@ -1,6 +1,6 @@
 services:
   lb:
-    image: nathanfabio/fraud-detector4:v32
+    image: nathanfabio/fraud-detector4:v33
     command: ["./lb", "9999", "/run/sock/api1.sock", "/run/sock/api2.sock"]
     ports:
       - "9999:9999"
@@ -15,7 +15,7 @@ services:
     cpus: "0.05"
 
   api1:
-    image: nathanfabio/fraud-detector4:v32
+    image: nathanfabio/fraud-detector4:v33
     command: ["./server"]
     hostname: api1
     volumes:
@@ -26,7 +26,7 @@ services:
     cpus: "0.475"
 
   api2:
-    image: nathanfabio/fraud-detector4:v32
+    image: nathanfabio/fraud-detector4:v33
     command: ["./server"]
     hostname: api2
     volumes:
