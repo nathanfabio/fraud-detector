@@ -324,15 +324,12 @@ func buildVector(
 ) Vec14 {
 	var vec Vec14
 
-	reqHour, reqDow, reqMinOfYear, reqSec, valid := fastParseTimestamp(requestedAtStr)
-	if !valid {
-		requestedAt, err := time.Parse(time.RFC3339, requestedAtStr)
-		if err != nil {
-			requestedAt = time.Now().UTC()
-		}
-		reqHour = requestedAt.Hour()
-		reqDow = (int(requestedAt.Weekday()) + 6) % 7
+	requestedAt, err := time.Parse(time.RFC3339, requestedAtStr)
+	if err != nil {
+		requestedAt = time.Now().UTC()
 	}
+	reqHour := requestedAt.Hour()
+	reqDow := (int(requestedAt.Weekday()) + 6) % 7
 
 	vec[0] = quantize(txAmount / cfg.MaxAmount)
 	vec[1] = quantize(txInstallments / cfg.MaxInstallments)
@@ -347,22 +344,15 @@ func buildVector(
 	vec[4] = int16(math.Round(float64(reqDow) / 6.0 * 10000.0))
 
 	if hasLastTx && lastTxAtStr != "" {
-		_, _, lastMinOfYear, lastSec, valid2 := fastParseTimestamp(lastTxAtStr)
-		if valid && valid2 {
-			minutes := float64(reqMinOfYear-lastMinOfYear) + float64(reqSec-lastSec)/60.0
+		lastTs, err := time.Parse(time.RFC3339, lastTxAtStr)
+		if err == nil {
+			minutes := requestedAt.Sub(lastTs).Minutes()
 			if minutes < 0 {
 				minutes = 0
 			}
 			vec[5] = quantize(minutes / cfg.MaxMinutes)
 		} else {
-			lastTs, err := time.Parse(time.RFC3339, lastTxAtStr)
-			if err == nil {
-				requestedAt, _ := time.Parse(time.RFC3339, requestedAtStr)
-				minutes := requestedAt.Sub(lastTs).Minutes()
-				vec[5] = quantize(minutes / cfg.MaxMinutes)
-			} else {
-				vec[5] = -1
-			}
+			vec[5] = -1
 		}
 		vec[6] = quantize(kmFromCurrent / cfg.MaxKm)
 	} else {
@@ -390,8 +380,6 @@ func buildVector(
 
 	return vec
 }
-
-var monthDays = []int{0, 31, 59, 90, 120, 151, 181, 212, 243, 273, 304, 334}
 
 func fastMCCRisk(b []byte) float64 {
 	if len(b) != 4 {
@@ -421,24 +409,4 @@ func fastMCCRisk(b []byte) float64 {
 		return 0.50
 	}
 	return 0.5
-}
-
-func fastParseTimestamp(s string) (hour, dow, minOfYear int, sec int, ok bool) {
-	if len(s) < 17 {
-		return 0, 0, 0, 0, false
-	}
-	month := int(s[5]-'0')*10 + int(s[6]-'0')
-	day := int(s[8]-'0')*10 + int(s[9]-'0')
-	hour = int(s[11]-'0')*10 + int(s[12]-'0')
-	minute := int(s[14]-'0')*10 + int(s[15]-'0')
-	if len(s) >= 19 && s[16] == ':' {
-		sec = int(s[17]-'0')*10 + int(s[18]-'0')
-	}
-	if month < 1 || month > 12 {
-		return 0, 0, 0, 0, false
-	}
-	dayOfYear := monthDays[month-1] + day
-	dow = (dayOfYear + 2) % 7
-	minOfYear = (dayOfYear-1)*1440 + hour*60 + minute
-	return hour, dow, minOfYear, sec, true
 }
