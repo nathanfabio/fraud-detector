@@ -324,12 +324,16 @@ func buildVector(
 ) Vec14 {
 	var vec Vec14
 
-	requestedAt, err := time.Parse(time.RFC3339, requestedAtStr)
-	if err != nil {
-		requestedAt = time.Now().UTC()
+	reqYear, reqMonth, reqDay, reqHour, reqMin, reqSec, ok := parseTimestamp(requestedAtStr)
+	if !ok {
+		requestedAt, err := time.Parse(time.RFC3339, requestedAtStr)
+		if err != nil {
+			requestedAt = time.Now().UTC()
+		}
+		reqHour = requestedAt.Hour()
 	}
-	reqHour := requestedAt.Hour()
-	reqDow := (int(requestedAt.Weekday()) + 6) % 7
+	reqDow := dayOfWeek(reqYear, reqMonth, reqDay)
+	reqTotalMin := totalMinutes(reqYear, reqMonth, reqDay, reqHour, reqMin, reqSec)
 
 	vec[0] = quantize(txAmount / cfg.MaxAmount)
 	vec[1] = quantize(txInstallments / cfg.MaxInstallments)
@@ -344,15 +348,24 @@ func buildVector(
 	vec[4] = int16(math.Round(float64(reqDow) / 6.0 * 10000.0))
 
 	if hasLastTx && lastTxAtStr != "" {
-		lastTs, err := time.Parse(time.RFC3339, lastTxAtStr)
-		if err == nil {
-			minutes := requestedAt.Sub(lastTs).Minutes()
+		_, _, _, _, _, _, ok2 := parseTimestamp(lastTxAtStr)
+		if ok && ok2 {
+			ly, lm, ld, lh, lmi, ls, _ := parseTimestamp(lastTxAtStr)
+			lastTotalMin := totalMinutes(ly, lm, ld, lh, lmi, ls)
+			minutes := float64(reqTotalMin) - float64(lastTotalMin)
 			if minutes < 0 {
 				minutes = 0
 			}
 			vec[5] = quantize(minutes / cfg.MaxMinutes)
 		} else {
-			vec[5] = -1
+			lastTs, err := time.Parse(time.RFC3339, lastTxAtStr)
+			if err == nil {
+				requestedAt, _ := time.Parse(time.RFC3339, requestedAtStr)
+				minutes := requestedAt.Sub(lastTs).Minutes()
+				vec[5] = quantize(minutes / cfg.MaxMinutes)
+			} else {
+				vec[5] = -1
+			}
 		}
 		vec[6] = quantize(kmFromCurrent / cfg.MaxKm)
 	} else {
@@ -410,3 +423,45 @@ func fastMCCRisk(b []byte) float64 {
 	}
 	return 0.5
 }
+
+func parseTimestamp(s string) (year, month, day, hour, min, sec int, ok bool) {
+	if len(s) < 19 {
+		return 0, 0, 0, 0, 0, 0, false
+	}
+	year = int(s[0]-'0')*1000 + int(s[1]-'0')*100 + int(s[2]-'0')*10 + int(s[3]-'0')
+	month = int(s[5]-'0')*10 + int(s[6]-'0')
+	day = int(s[8]-'0')*10 + int(s[9]-'0')
+	hour = int(s[11]-'0')*10 + int(s[12]-'0')
+	min = int(s[14]-'0')*10 + int(s[15]-'0')
+	if s[16] == ':' && len(s) >= 19 {
+		sec = int(s[17]-'0')*10 + int(s[18]-'0')
+	}
+	if month < 1 || month > 12 || day < 1 || day > 31 {
+		return 0, 0, 0, 0, 0, 0, false
+	}
+	return year, month, day, hour, min, sec, true
+}
+
+func dayOfWeek(y, m, d int) int {
+	t := []int{0, 3, 2, 5, 0, 3, 5, 1, 4, 6, 2, 4}
+	if m < 3 {
+		y--
+	}
+	dow := (y + y/4 - y/100 + y/400 + t[m-1] + d) % 7
+	if dow < 0 {
+		dow += 7
+	}
+	// convert Sun=0..Sat=6 to Mon=0..Sun=6
+	return (dow + 6) % 7
+}
+
+func totalMinutes(year, month, day, hour, min, sec int) int64 {
+	if month < 3 {
+		year--
+		month += 12
+	}
+	days := int64(year)*365 + int64(year)/4 - int64(year)/100 + int64(year)/400
+	days += int64(153*month-457)/5 + int64(day) - 306
+	return days*1440 + int64(hour)*60 + int64(min)
+}
+
