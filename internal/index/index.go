@@ -15,14 +15,14 @@ import (
 const dims = 14
 const topK = 5
 const nprobe = 24
-const ivfMagic = 0x05415649
+const ivfMagic = 0x06415649
 
 const numPartitions = 16
 const maxClusters = 2048
 const minClusters = 64
 const clusterDivisor = 300
 
-type Vector [dims]int8
+type Vector [dims]int16
 
 type SubIndex struct {
 	Vectors     []Vector
@@ -55,7 +55,7 @@ func PartitionTag(vec Vector) int {
 	return tag
 }
 
-func quantize(v float64) int8 {
+func quantize(v float64) int16 {
 	if v == -1 {
 		return -1
 	}
@@ -65,7 +65,7 @@ func quantize(v float64) int8 {
 	if v > 1 {
 		v = 1
 	}
-	return int8(math.Round(v * 127.0))
+	return int16(math.Round(v * 10000.0))
 }
 
 type rawRecord struct {
@@ -277,7 +277,7 @@ func buildSub(records []rawRecord) *SubIndex {
 			if counts[c] > 0 {
 				cnt := float64(counts[c])
 				for d := 0; d < dims; d++ {
-					centroids[c][d] = int8(math.Round(acc[c][d] / cnt))
+					centroids[c][d] = int16(math.Round(acc[c][d] / cnt))
 				}
 			}
 		}
@@ -585,7 +585,7 @@ func (idx *IVFIndex) saveBinary(path string) error {
 			n = len(sub.Vectors)
 			nc = sub.NumClusters
 		}
-		offset += uint32(n*14 + n + nc*14 + nc*14 + nc*14 + (nc+1)*4)
+		offset += uint32(n*28 + n + nc*28 + nc*28 + nc*28 + (nc+1)*4)
 	}
 
 	for tag := 0; tag < numPartitions; tag++ {
@@ -609,20 +609,20 @@ func (idx *IVFIndex) saveBinary(path string) error {
 			continue
 		}
 		for _, v := range sub.Vectors {
-			raw := unsafe.Slice((*byte)(unsafe.Pointer(&v[0])), dims)
+			raw := unsafe.Slice((*byte)(unsafe.Pointer(&v[0])), dims*2)
 			f.Write(raw)
 		}
 		f.Write(sub.Labels)
 		for _, c := range sub.Centroids {
-			raw := unsafe.Slice((*byte)(unsafe.Pointer(&c[0])), dims)
+			raw := unsafe.Slice((*byte)(unsafe.Pointer(&c[0])), dims*2)
 			f.Write(raw)
 		}
 		for _, bm := range sub.BBoxMin {
-			raw := unsafe.Slice((*byte)(unsafe.Pointer(&bm[0])), dims)
+			raw := unsafe.Slice((*byte)(unsafe.Pointer(&bm[0])), dims*2)
 			f.Write(raw)
 		}
 		for _, bm := range sub.BBoxMax {
-			raw := unsafe.Slice((*byte)(unsafe.Pointer(&bm[0])), dims)
+			raw := unsafe.Slice((*byte)(unsafe.Pointer(&bm[0])), dims*2)
 			f.Write(raw)
 		}
 		offBytes := make([]byte, (sub.NumClusters+1)*4)
@@ -686,7 +686,7 @@ func loadBinary(path string) (*IVFIndex, error) {
 		}
 
 		for vi := 0; vi < n; vi++ {
-			raw := unsafe.Slice((*byte)(unsafe.Pointer(&sub.Vectors[vi][0])), dims)
+			raw := unsafe.Slice((*byte)(unsafe.Pointer(&sub.Vectors[vi][0])), dims*2)
 			if _, err := io.ReadFull(f, raw); err != nil {
 				return nil, err
 			}
@@ -695,19 +695,19 @@ func loadBinary(path string) (*IVFIndex, error) {
 			return nil, err
 		}
 		for ci := 0; ci < nc; ci++ {
-			raw := unsafe.Slice((*byte)(unsafe.Pointer(&sub.Centroids[ci][0])), dims)
+			raw := unsafe.Slice((*byte)(unsafe.Pointer(&sub.Centroids[ci][0])), dims*2)
 			if _, err := io.ReadFull(f, raw); err != nil {
 				return nil, err
 			}
 		}
 		for ci := 0; ci < nc; ci++ {
-			raw := unsafe.Slice((*byte)(unsafe.Pointer(&sub.BBoxMin[ci][0])), dims)
+			raw := unsafe.Slice((*byte)(unsafe.Pointer(&sub.BBoxMin[ci][0])), dims*2)
 			if _, err := io.ReadFull(f, raw); err != nil {
 				return nil, err
 			}
 		}
 		for ci := 0; ci < nc; ci++ {
-			raw := unsafe.Slice((*byte)(unsafe.Pointer(&sub.BBoxMax[ci][0])), dims)
+			raw := unsafe.Slice((*byte)(unsafe.Pointer(&sub.BBoxMax[ci][0])), dims*2)
 			if _, err := io.ReadFull(f, raw); err != nil {
 				return nil, err
 			}

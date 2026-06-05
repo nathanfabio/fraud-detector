@@ -45,9 +45,9 @@ type LastTransaction struct {
 	KmFromCurrent float64 `json:"km_from_current"`
 }
 
-type Vec14 [14]int8
+type Vec14 [14]int16
 
-func quantize(v float64) int8 {
+func quantize(v float64) int16 {
 	if v == -1 {
 		return -1
 	}
@@ -57,7 +57,7 @@ func quantize(v float64) int8 {
 	if v > 1 {
 		v = 1
 	}
-	return int8(math.Round(v * 127.0))
+	return int16(math.Round(v * 10000.0))
 }
 
 func Build(req *Request, cfg *config.Normalization, mccRisk map[string]float64) Vec14 {
@@ -77,11 +77,11 @@ func Build(req *Request, cfg *config.Normalization, mccRisk map[string]float64) 
 		vec[2] = quantize(req.TransactionData.Amount / cfg.AmountVsAvgRatio)
 	}
 
-	vec[3] = int8(math.Round(float64(requestedAt.Hour()) / 23.0 * 127.0))
+	vec[3] = int16(math.Round(float64(requestedAt.Hour()) / 23.0 * 10000.0))
 
 	dow := requestedAt.Weekday()
 	dayOfWeek := (int(dow) + 6) % 7
-	vec[4] = int8(math.Round(float64(dayOfWeek) / 6.0 * 127.0))
+	vec[4] = int16(math.Round(float64(dayOfWeek) / 6.0 * 10000.0))
 
 	if req.LastTransaction != nil {
 		lastTs, err := time.Parse(time.RFC3339, req.LastTransaction.Timestamp)
@@ -101,19 +101,19 @@ func Build(req *Request, cfg *config.Normalization, mccRisk map[string]float64) 
 	vec[8] = quantize(float64(req.Customer.TxCount24h) / cfg.MaxTxCount24h)
 
 	if req.Terminal.IsOnline {
-		vec[9] = 127
+		vec[9] = 10000
 	} else {
 		vec[9] = 0
 	}
 
 	if req.Terminal.CardPresent {
-		vec[10] = 127
+		vec[10] = 10000
 	} else {
 		vec[10] = 0
 	}
 
 	if isUnknownMerchant(req.Merchant.ID, req.Customer.KnownMerchants) {
-		vec[11] = 127
+		vec[11] = 10000
 	} else {
 		vec[11] = 0
 	}
@@ -122,7 +122,7 @@ func Build(req *Request, cfg *config.Normalization, mccRisk map[string]float64) 
 	if !ok {
 		risk = 0.5
 	}
-	vec[12] = int8(math.Round(risk * 127.0))
+	vec[12] = int16(math.Round(risk * 10000.0))
 
 	vec[13] = quantize(req.Merchant.AvgAmount / cfg.MaxMerchantAvgAmount)
 
