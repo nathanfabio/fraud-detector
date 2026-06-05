@@ -406,36 +406,30 @@ type probeEntry struct {
 	dist int32
 }
 
-func insertProbe(probes *[]probeEntry, c int, dist int32) {
-	// Find insertion point from end
-	i := len(*probes) - 1
-	for i >= 0 && dist < (*probes)[i].dist {
-		i--
-	}
-	idx := i + 1
-	if idx >= nprobe {
-		return
-	}
-	if len(*probes) < nprobe {
-		*probes = append(*probes, probeEntry{})
-	}
-	// Shift right
-	for j := len(*probes) - 1; j > idx; j-- {
-		(*probes)[j] = (*probes)[j-1]
-	}
-	(*probes)[idx] = probeEntry{c, dist}
-}
-
 func (sub *SubIndex) search(query *Vector) int {
 	if sub.NumClusters == 0 {
 		return 0
 	}
 
-	probes := make([]probeEntry, 0, nprobe)
+	var probes [nprobe]probeEntry
+	var probeCount int
 
 	for c := 0; c < sub.NumClusters; c++ {
 		d := bboxDistSq(query, &sub.BBoxMin[c], &sub.BBoxMax[c])
-		insertProbe(&probes, c, d)
+		// Insert into sorted probes array
+		pos := probeCount
+		for pos > 0 && d < probes[pos-1].dist {
+			pos--
+		}
+		if pos < nprobe {
+			if probeCount < nprobe {
+				probeCount++
+			}
+			for j := probeCount - 1; j > pos; j-- {
+				probes[j] = probes[j-1]
+			}
+			probes[pos] = probeEntry{c, d}
+		}
 	}
 
 	var bestDist [topK]int32
@@ -444,7 +438,7 @@ func (sub *SubIndex) search(query *Vector) int {
 		bestDist[i] = math.MaxInt32
 	}
 
-	for ci := 0; ci < len(probes); ci++ {
+	for ci := 0; ci < probeCount; ci++ {
 		c := probes[ci].c
 		start := sub.Offsets[c]
 		end := sub.Offsets[c+1]
@@ -477,8 +471,8 @@ func (sub *SubIndex) search(query *Vector) int {
 	// Repair: extend to full sweep if verdict is ambiguous (1-4 frauds)
 	if fraudCount > 0 && fraudCount < topK {
 		var probedMap [maxClusters]bool
-		for _, p := range probes {
-			probedMap[p.c] = true
+		for i := 0; i < probeCount; i++ {
+			probedMap[probes[i].c] = true
 		}
 		for c := 0; c < sub.NumClusters; c++ {
 			if probedMap[c] {

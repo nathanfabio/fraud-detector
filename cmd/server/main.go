@@ -330,7 +330,7 @@ func main() {
 		log.Printf("Epoll loop starting on %s", sockPath)
 	events := make([]unix.EpollEvent, maxEvents)
 	for {
-		n, err := unix.EpollWait(epollFD, events, 1)
+		n, err := unix.EpollWait(epollFD, events, 0)
 		if err == unix.EINTR {
 			continue
 		}
