@@ -14,7 +14,7 @@ import (
 
 const dims = 14
 const topK = 5
-const nprobe = 18
+const nprobe = 12
 const ivfMagic = 0x06415649
 
 const numPartitions = 16
@@ -369,19 +369,35 @@ func buildSub(records []rawRecord) *SubIndex {
 }
 
 func bboxDistSq(query *Vector, bmin, bmax *Vector) int32 {
+	q0 := int32(query[0]); lo := int32(bmin[0]); hi := int32(bmax[0])
 	var sum int32
-	for d := 0; d < dims; d++ {
-		q := int32(query[d])
-		lo := int32(bmin[d])
-		hi := int32(bmax[d])
-		if q < lo {
-			diff := lo - q
-			sum += diff * diff
-		} else if q > hi {
-			diff := q - hi
-			sum += diff * diff
-		}
-	}
+	if q0 < lo { d := lo - q0; sum = d * d } else if q0 > hi { d := q0 - hi; sum = d * d }
+	q1 := int32(query[1]); lo = int32(bmin[1]); hi = int32(bmax[1])
+	if q1 < lo { d := lo - q1; sum += d * d } else if q1 > hi { d := q1 - hi; sum += d * d }
+	q2 := int32(query[2]); lo = int32(bmin[2]); hi = int32(bmax[2])
+	if q2 < lo { d := lo - q2; sum += d * d } else if q2 > hi { d := q2 - hi; sum += d * d }
+	q3 := int32(query[3]); lo = int32(bmin[3]); hi = int32(bmax[3])
+	if q3 < lo { d := lo - q3; sum += d * d } else if q3 > hi { d := q3 - hi; sum += d * d }
+	q4 := int32(query[4]); lo = int32(bmin[4]); hi = int32(bmax[4])
+	if q4 < lo { d := lo - q4; sum += d * d } else if q4 > hi { d := q4 - hi; sum += d * d }
+	q5 := int32(query[5]); lo = int32(bmin[5]); hi = int32(bmax[5])
+	if q5 < lo { d := lo - q5; sum += d * d } else if q5 > hi { d := q5 - hi; sum += d * d }
+	q6 := int32(query[6]); lo = int32(bmin[6]); hi = int32(bmax[6])
+	if q6 < lo { d := lo - q6; sum += d * d } else if q6 > hi { d := q6 - hi; sum += d * d }
+	q7 := int32(query[7]); lo = int32(bmin[7]); hi = int32(bmax[7])
+	if q7 < lo { d := lo - q7; sum += d * d } else if q7 > hi { d := q7 - hi; sum += d * d }
+	q8 := int32(query[8]); lo = int32(bmin[8]); hi = int32(bmax[8])
+	if q8 < lo { d := lo - q8; sum += d * d } else if q8 > hi { d := q8 - hi; sum += d * d }
+	q9 := int32(query[9]); lo = int32(bmin[9]); hi = int32(bmax[9])
+	if q9 < lo { d := lo - q9; sum += d * d } else if q9 > hi { d := q9 - hi; sum += d * d }
+	qa := int32(query[10]); lo = int32(bmin[10]); hi = int32(bmax[10])
+	if qa < lo { d := lo - qa; sum += d * d } else if qa > hi { d := qa - hi; sum += d * d }
+	qb := int32(query[11]); lo = int32(bmin[11]); hi = int32(bmax[11])
+	if qb < lo { d := lo - qb; sum += d * d } else if qb > hi { d := qb - hi; sum += d * d }
+	qc := int32(query[12]); lo = int32(bmin[12]); hi = int32(bmax[12])
+	if qc < lo { d := lo - qc; sum += d * d } else if qc > hi { d := qc - hi; sum += d * d }
+	qd := int32(query[13]); lo = int32(bmin[13]); hi = int32(bmax[13])
+	if qd < lo { d := lo - qd; sum += d * d } else if qd > hi { d := qd - hi; sum += d * d }
 	return sum
 }
 
@@ -391,24 +407,23 @@ type probeEntry struct {
 }
 
 func insertProbe(probes *[]probeEntry, c int, dist int32) {
-	for i := len(*probes) - 1; i >= 0; i-- {
-		if dist >= (*probes)[i].dist {
-			idx := i + 1
-			if idx < nprobe {
-				if len(*probes) < nprobe {
-					*probes = append(*probes, probeEntry{})
-				}
-				copy((*probes)[idx+1:], (*probes)[idx:len(*probes)-1])
-				(*probes)[idx] = probeEntry{c, dist}
-			}
-			return
-		}
+	// Find insertion point from end
+	i := len(*probes) - 1
+	for i >= 0 && dist < (*probes)[i].dist {
+		i--
+	}
+	idx := i + 1
+	if idx >= nprobe {
+		return
 	}
 	if len(*probes) < nprobe {
 		*probes = append(*probes, probeEntry{})
 	}
-	copy((*probes)[1:], (*probes)[:len(*probes)-1])
-	(*probes)[0] = probeEntry{c, dist}
+	// Shift right
+	for j := len(*probes) - 1; j > idx; j-- {
+		(*probes)[j] = (*probes)[j-1]
+	}
+	(*probes)[idx] = probeEntry{c, dist}
 }
 
 func (sub *SubIndex) search(query *Vector) int {
