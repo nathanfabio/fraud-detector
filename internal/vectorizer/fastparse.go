@@ -324,7 +324,7 @@ func buildVector(
 ) Vec14 {
 	var vec Vec14
 
-	reqHour, reqDow, reqMinOfYear, valid := fastParseTimestamp(requestedAtStr)
+	reqHour, reqDow, reqMinOfYear, reqSec, valid := fastParseTimestamp(requestedAtStr)
 	if !valid {
 		requestedAt, err := time.Parse(time.RFC3339, requestedAtStr)
 		if err != nil {
@@ -347,9 +347,9 @@ func buildVector(
 	vec[4] = int16(math.Round(float64(reqDow) / 6.0 * 10000.0))
 
 	if hasLastTx && lastTxAtStr != "" {
-		_, _, lastMinOfYear, valid2 := fastParseTimestamp(lastTxAtStr)
+		_, _, lastMinOfYear, lastSec, valid2 := fastParseTimestamp(lastTxAtStr)
 		if valid && valid2 {
-			minutes := float64(reqMinOfYear - lastMinOfYear)
+			minutes := float64(reqMinOfYear-lastMinOfYear) + float64(reqSec-lastSec)/60.0
 			if minutes < 0 {
 				minutes = 0
 			}
@@ -423,19 +423,22 @@ func fastMCCRisk(b []byte) float64 {
 	return 0.5
 }
 
-func fastParseTimestamp(s string) (hour, dow, minOfYear int, ok bool) {
+func fastParseTimestamp(s string) (hour, dow, minOfYear int, sec int, ok bool) {
 	if len(s) < 17 {
-		return 0, 0, 0, false
+		return 0, 0, 0, 0, false
 	}
 	month := int(s[5]-'0')*10 + int(s[6]-'0')
 	day := int(s[8]-'0')*10 + int(s[9]-'0')
 	hour = int(s[11]-'0')*10 + int(s[12]-'0')
 	minute := int(s[14]-'0')*10 + int(s[15]-'0')
+	if len(s) >= 19 && s[16] == ':' {
+		sec = int(s[17]-'0')*10 + int(s[18]-'0')
+	}
 	if month < 1 || month > 12 {
-		return 0, 0, 0, false
+		return 0, 0, 0, 0, false
 	}
 	dayOfYear := monthDays[month-1] + day
 	dow = (dayOfYear + 2) % 7
 	minOfYear = (dayOfYear-1)*1440 + hour*60 + minute
-	return hour, dow, minOfYear, true
+	return hour, dow, minOfYear, sec, true
 }
