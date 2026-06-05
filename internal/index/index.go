@@ -14,7 +14,7 @@ import (
 
 const dims = 14
 const topK = 5
-const nprobe = 24
+const nprobe = 18
 const ivfMagic = 0x06415649
 
 const numPartitions = 16
@@ -459,6 +459,48 @@ func (sub *SubIndex) search(query *Vector) int {
 		}
 	}
 
+	// Repair: extend to full sweep if verdict is ambiguous (1-4 frauds)
+	if fraudCount > 0 && fraudCount < topK {
+		var probedMap [maxClusters]bool
+		for _, p := range probes {
+			probedMap[p.c] = true
+		}
+		for c := 0; c < sub.NumClusters; c++ {
+			if probedMap[c] {
+				continue
+			}
+			lb := bboxDistSq(query, &sub.BBoxMin[c], &sub.BBoxMax[c])
+			if lb >= bestDist[topK-1] {
+				continue
+			}
+			start := sub.Offsets[c]
+			end := sub.Offsets[c+1]
+			threshold := bestDist[topK-1]
+
+			for i := start; i < end; i++ {
+				d := euclideanDistSqEarlyExit(*query, sub.Vectors[i], threshold)
+				if d >= threshold {
+					continue
+				}
+				j := topK - 1
+				for j > 0 && d < bestDist[j-1] {
+					bestDist[j] = bestDist[j-1]
+					bestLabels[j] = bestLabels[j-1]
+					j--
+				}
+				bestDist[j] = d
+				bestLabels[j] = sub.Labels[i]
+				threshold = bestDist[topK-1]
+			}
+		}
+		fraudCount = 0
+		for i := 0; i < topK; i++ {
+			if bestLabels[i] == 1 {
+				fraudCount++
+			}
+		}
+	}
+
 	return fraudCount
 }
 
@@ -492,19 +534,10 @@ func euclideanDistSq(a, b Vector) int32 {
 func euclideanDistSqEarlyExit(a, b Vector, threshold int32) int32 {
 	d0 := int32(a[0]) - int32(b[0])
 	sum := d0 * d0
-	if sum > threshold {
-		return sum
-	}
 	d1 := int32(a[1]) - int32(b[1])
 	sum += d1 * d1
-	if sum > threshold {
-		return sum
-	}
 	d2 := int32(a[2]) - int32(b[2])
 	sum += d2 * d2
-	if sum > threshold {
-		return sum
-	}
 	d3 := int32(a[3]) - int32(b[3])
 	sum += d3 * d3
 	if sum > threshold {
@@ -512,19 +545,10 @@ func euclideanDistSqEarlyExit(a, b Vector, threshold int32) int32 {
 	}
 	d4 := int32(a[4]) - int32(b[4])
 	sum += d4 * d4
-	if sum > threshold {
-		return sum
-	}
 	d5 := int32(a[5]) - int32(b[5])
 	sum += d5 * d5
-	if sum > threshold {
-		return sum
-	}
 	d6 := int32(a[6]) - int32(b[6])
 	sum += d6 * d6
-	if sum > threshold {
-		return sum
-	}
 	d7 := int32(a[7]) - int32(b[7])
 	sum += d7 * d7
 	if sum > threshold {
@@ -532,19 +556,10 @@ func euclideanDistSqEarlyExit(a, b Vector, threshold int32) int32 {
 	}
 	d8 := int32(a[8]) - int32(b[8])
 	sum += d8 * d8
-	if sum > threshold {
-		return sum
-	}
 	d9 := int32(a[9]) - int32(b[9])
 	sum += d9 * d9
-	if sum > threshold {
-		return sum
-	}
 	da := int32(a[10]) - int32(b[10])
 	sum += da * da
-	if sum > threshold {
-		return sum
-	}
 	db := int32(a[11]) - int32(b[11])
 	sum += db * db
 	if sum > threshold {
@@ -552,9 +567,6 @@ func euclideanDistSqEarlyExit(a, b Vector, threshold int32) int32 {
 	}
 	dc := int32(a[12]) - int32(b[12])
 	sum += dc * dc
-	if sum > threshold {
-		return sum
-	}
 	dd := int32(a[13]) - int32(b[13])
 	sum += dd * dd
 	return sum
